@@ -1,20 +1,597 @@
 {
-  "genere": "2026-11-10 22:10 UTC",
+  "genere": "2026-11-11 21:14 UTC",
   "packs": [
     {
-      "id": "classiques-de-la-nuit",
-      "titre": "Classiques de la nuit",
-      "description": "Un pack de démonstration : deux petits livres pour essayer l'import, supprimez-le quand vous voulez.",
+      "id": "75 Japanese Novels",
+      "titre": "75 Japanese Novels",
+      "description": "",
       "type": "dossier",
-      "source": "packs/classiques-de-la-nuit/",
+      "source": "packs/75 Japanese Novels/",
       "livres": [
         {
-          "fichier": "contes-en-pleine-lune.epub",
-          "taille": 38449
+          "fichier": "Abe Kazushige_ Mysterious Setting .epub",
+          "taille": 316744
         },
         {
-          "fichier": "notes-de-veille.pdf",
-          "taille": 47569
+          "fichier": "Abe Kobo_ The Ruined Map .epub",
+          "taille": 1265063
+        },
+        {
+          "fichier": "Agawa Hiroyuki_ Behind the Clouds .epub",
+          "taille": 4208364
+        },
+        {
+          "fichier": "Akasaka Mari_ Vibrator .epub",
+          "taille": 204297
+        },
+        {
+          "fichier": "Akutagawa Ryunosuke_ Kappa .epub",
+          "taille": 2710145
+        },
+        {
+          "fichier": "Aoyama Nanae_ A Perfect Day to be Alone .epub",
+          "taille": 1086171
+        },
+        {
+          "fichier": "Arisugawa Alice_ The Moai Island Puzzle .epub",
+          "taille": 485759
+        },
+        {
+          "fichier": "Ariyoshi Sawako_ The Doctor_s Wife .epub",
+          "taille": 1328814
+        },
+        {
+          "fichier": "Ayase Maru_ The Forest Brims Over .epub",
+          "taille": 993273
+        },
+        {
+          "fichier": "Ayatsuji Yukito_ The Decagon House Murder .epub",
+          "taille": 1250693
+        },
+        {
+          "fichier": "Bando Masako_ Mandala Road .epub",
+          "taille": 1668361
+        },
+        {
+          "fichier": "Dazai Osamu_ No Longer Human .epub",
+          "taille": 1674415
+        },
+        {
+          "fichier": "Edogawa Rampo_ Beast in the Shadows .epub",
+          "taille": 815077
+        },
+        {
+          "fichier": "EnJoh To_ Harlequin Butterfly .epub",
+          "taille": 577417
+        },
+        {
+          "fichier": "Enchi Fumiko_ The Waiting Years .epub",
+          "taille": 3205996
+        },
+        {
+          "fichier": "Endo Shusaku_ Kiku_s Prayer .epub",
+          "taille": 515652
+        },
+        {
+          "fichier": "Fujino Kaori_ Nails and Eyes .epub",
+          "taille": 343359
+        },
+        {
+          "fichier": "Fujisawa Shuhei_ Semishigure .epub",
+          "taille": 775807
+        },
+        {
+          "fichier": "Funada Yoichi_ May in the Valley of the Rainbow .epub",
+          "taille": 1160023
+        },
+        {
+          "fichier": "Furukawa Hideo_ Slow Boat .epub",
+          "taille": 2107519
+        },
+        {
+          "fichier": "Hase Seishu_ The Boy and the Dog .epub",
+          "taille": 2350246
+        },
+        {
+          "fichier": "Hayashi Fumiko_ Floating Clouds .epub",
+          "taille": 1242813
+        },
+        {
+          "fichier": "Higashino Keigo_ The Devotion of Suspect X .epub",
+          "taille": 294354
+        },
+        {
+          "fichier": "Hirano Keiichi_ The Man .epub",
+          "taille": 590410
+        },
+        {
+          "fichier": "Ibuse Masuji_ Black Rain .epub",
+          "taille": 798439
+        },
+        {
+          "fichier": "Ichikawa Saou_ Hunchback .epub",
+          "taille": 2664873
+        },
+        {
+          "fichier": "Imamura Natsuko_ This is Amiko, Do You Copy .epub",
+          "taille": 1224240
+        },
+        {
+          "fichier": "Inoue Yasushi_ The Hunting Gun .epub",
+          "taille": 717493
+        },
+        {
+          "fichier": "Ishikawa Jun_ The Bodhisattva .epub",
+          "taille": 1323767
+        },
+        {
+          "fichier": "Kanai Mieko_ Mild Vertigo .epub",
+          "taille": 4132149
+        },
+        {
+          "fichier": "Kanehara Hitomi_ Autofiction .epub",
+          "taille": 858488
+        },
+        {
+          "fichier": "Kaneshiro Kazuki_ Go .epub",
+          "taille": 1828216
+        },
+        {
+          "fichier": "Kashimada Maki_ Love at Six Thousand Degrees .epub",
+          "taille": 966633
+        },
+        {
+          "fichier": "Kawabata Yasunori_ The Rainbow .epub",
+          "taille": 1496418
+        },
+        {
+          "fichier": "Kawakami Mieko_ All the Lovers in the Night .epub",
+          "taille": 632014
+        },
+        {
+          "fichier": "Kirino Natsuo_ Out .epub",
+          "taille": 437125
+        },
+        {
+          "fichier": "Kitakata Kenzo_ Winter Sleep .epub",
+          "taille": 856874
+        },
+        {
+          "fichier": "Machida Ko_ Punk Samurai Slash Down .epub",
+          "taille": 2250023
+        },
+        {
+          "fichier": "Maijo Otaro_ Asura Girl .epub",
+          "taille": 1333671
+        },
+        {
+          "fichier": "Matsumoto Seicho_ Tokyo Express .epub",
+          "taille": 2201274
+        },
+        {
+          "fichier": "Matsuura Rieko_ The Apprenticeship of Big Toe P .epub",
+          "taille": 1182732
+        },
+        {
+          "fichier": "Mishima Yukio_ The Frolic of the Beasts .epub",
+          "taille": 1079767
+        },
+        {
+          "fichier": "Mori Ogai_ Wild Geese .epub",
+          "taille": 1137078
+        },
+        {
+          "fichier": "Morimi Tomihiko_ Night is Short, Walk on Girl .epub",
+          "taille": 1232935
+        },
+        {
+          "fichier": "Murakami Ryu _ Audition .epub",
+          "taille": 210465
+        },
+        {
+          "fichier": "Murasaki Shikibu_ The Tale of Genji .epub",
+          "taille": 9051062
+        },
+        {
+          "fichier": "Murata Sayaka_ Convenience Store Woman .epub",
+          "taille": 2345432
+        },
+        {
+          "fichier": "Nagai Kafu_ Rivalry .epub",
+          "taille": 1130981
+        },
+        {
+          "fichier": "Nakajima Kyoko_ The Little House .epub",
+          "taille": 537692
+        },
+        {
+          "fichier": "Nakamura Fuminori_ The Boy in the Earth .epub",
+          "taille": 342171
+        },
+        {
+          "fichier": "Nonami Asa_ The Hunter .epub",
+          "taille": 430267
+        },
+        {
+          "fichier": "Nosaka Akiyuki_ The Pornographers .epub",
+          "taille": 1138322
+        },
+        {
+          "fichier": "Oe Kenzaburo_ Somersault .epub",
+          "taille": 1024322
+        },
+        {
+          "fichier": "Ogawa Yoko_ The Housekeeper and the Professor .epub",
+          "taille": 331992
+        },
+        {
+          "fichier": "Okuizumi Hikaru_ The Stones Cry Out .epub",
+          "taille": 974691
+        },
+        {
+          "fichier": "Ooka Shohei_ Fires on the Plain .epub",
+          "taille": 376248
+        },
+        {
+          "fichier": "Osaka Go_ The Red Star of Cadiz .epub",
+          "taille": 2270973
+        },
+        {
+          "fichier": "Oyamada Hiroko_ Weasels in the Attic .epub",
+          "taille": 213663
+        },
+        {
+          "fichier": "Shiba Ryotaro_ The Tatar Whirlwind .epub",
+          "taille": 3746302
+        },
+        {
+          "fichier": "Shimada Soji_ The Tokyo Zodiac Murders .epub",
+          "taille": 2103638
+        },
+        {
+          "fichier": "Shimamoto Rio_ First Love .epub",
+          "taille": 296585
+        },
+        {
+          "fichier": "Soseki Natsume_ Kokoro .epub",
+          "taille": 792772
+        },
+        {
+          "fichier": "Suzuki Koji_ Ring .epub",
+          "taille": 260448
+        },
+        {
+          "fichier": "Takami Koushun_ Battle Royale .epub",
+          "taille": 756631
+        },
+        {
+          "fichier": "Takemoto Novala_ Kamikaze Girls .epub",
+          "taille": 2096464
+        },
+        {
+          "fichier": "Tanizaki Junichiro_ In Black and White .epub",
+          "taille": 730318
+        },
+        {
+          "fichier": "Tawada Yoko_ The Last Children of Tokyo .epub",
+          "taille": 343134
+        },
+        {
+          "fichier": "Tsushima Yuko_ Woman Running in the Mountains .epub",
+          "taille": 846234
+        },
+        {
+          "fichier": "Uketsu_ Strange Pictures .epub",
+          "taille": 1671326
+        },
+        {
+          "fichier": "Uno Chiyo_ The Story of a Single Woman .epub",
+          "taille": 586823
+        },
+        {
+          "fichier": "Yoshimoto Banana_ Moshi-Moshi .epub",
+          "taille": 2262666
+        },
+        {
+          "fichier": "Yoshino Genzaburo_ How Do You Live .epub",
+          "taille": 616639
+        }
+      ]
+    },
+    {
+      "id": "Miscellaneous Fiction",
+      "titre": "Miscellaneous Fiction",
+      "description": "",
+      "type": "dossier",
+      "source": "packs/Miscellaneous Fiction/",
+      "livres": [
+        {
+          "fichier": "A Month in the Country (Carr, J.l.) (Z-Library).epub",
+          "taille": 591006
+        },
+        {
+          "fichier": "A Sport and A Pastime (James Salter) (Z-Library).epub",
+          "taille": 2047327
+        },
+        {
+          "fichier": "All the Little Live Things (Wallace Stegner) (Z-Library).epub",
+          "taille": 304510
+        },
+        {
+          "fichier": "Apartment Women (Ne iusui siktak) (Gu Byeong-mo, Chi-young Kim (translation)) (Z-Library).epub",
+          "taille": 1365358
+        },
+        {
+          "fichier": "Audition (Katie Kitamura) (Z-Library).epub",
+          "taille": 553452
+        },
+        {
+          "fichier": "Austenland (Hale Shannon) (Z-Library).epub",
+          "taille": 236304
+        },
+        {
+          "fichier": "Autobiography of a Corpse (New York Review Books Classics) (Sigizmund Krzhizhanovsky) (Z-Library).epub",
+          "taille": 537975
+        },
+        {
+          "fichier": "Beyond the Rice Fields (Naivo) (Z-Library).epub",
+          "taille": 3589662
+        },
+        {
+          "fichier": "Bitter Orange Tree A Novel (Jokha Alharthi) (Z-Library).epub",
+          "taille": 517323
+        },
+        {
+          "fichier": "Bitter Sweet (Hattie Williams) (Z-Library).epub",
+          "taille": 1678236
+        },
+        {
+          "fichier": "Boredom (Alberto Moravia) (Z-Library).epub",
+          "taille": 322088
+        },
+        {
+          "fichier": "Cassandra (Christa Wolf) (Z-Library).epub",
+          "taille": 460157
+        },
+        {
+          "fichier": "Come Rain Or Come Shine (Kazuo Ishiguro) (Z-Library).epub",
+          "taille": 122382
+        },
+        {
+          "fichier": "Comemadre (Roque Larraquy) (Z-Library).epub",
+          "taille": 2352329
+        },
+        {
+          "fichier": "Courting Her Highness (Jean Plaidy) (Z-Library).epub",
+          "taille": 3547021
+        },
+        {
+          "fichier": "Dancing Lessons for the Advanced in Age (Hrabal Bohumil) (Z-Library).epub",
+          "taille": 159873
+        },
+        {
+          "fichier": "Endling (Maria Reva) (Z-Library).epub",
+          "taille": 4018296
+        },
+        {
+          "fichier": "Envy (Yuri Olesha, Ken Kafuls, Marian Schwartz) (Z-Library).epub",
+          "taille": 320397
+        },
+        {
+          "fichier": "Everything Flows (Grossman Vasily Chandler Robert (tr)) (Z-Library).epub",
+          "taille": 420957
+        },
+        {
+          "fichier": "Fear and Loathing in Las Vegas A Savage Journey to the Heart of the American Dream (Hunter S. Thompson) (Z-Library).epub",
+          "taille": 679901
+        },
+        {
+          "fichier": "Flashlight (Susan Choi) (Z-Library).epub",
+          "taille": 1415777
+        },
+        {
+          "fichier": "Flesh A Novel (David Szalay) (Z-Library).epub",
+          "taille": 2135035
+        },
+        {
+          "fichier": "Forest of Noise Poems (Mosab Abu Toha) (Z-Library).epub",
+          "taille": 6062809
+        },
+        {
+          "fichier": "Free Food for Millionaires (Min Jin Lee) (Z-Library).epub",
+          "taille": 610618
+        },
+        {
+          "fichier": "Gold Dust (Ibrahim al-Koni, Ibrāhīm Kūnī) (Z-Library).epub",
+          "taille": 182228
+        },
+        {
+          "fichier": "I Have the Right to Destroy Myself (Young-ha Kim, Chi-Young Kim (translation)) (Z-Library).epub",
+          "taille": 74192
+        },
+        {
+          "fichier": "If Only (Vigdis Hjorth) (Z-Library).epub",
+          "taille": 602242
+        },
+        {
+          "fichier": "Immaculate Conception (Ling Ling Huang) (Z-Library).epub",
+          "taille": 1852398
+        },
+        {
+          "fichier": "Is Mother Dead (Er Mor Død) (Vigdis Hjorth, Charlotte Barslund (translation)) (Z-Library).epub",
+          "taille": 375848
+        },
+        {
+          "fichier": "Justine, or the Misfortunes of Virtue (Oxford) (The Marquis de Sade) (Z-Library).epub",
+          "taille": 731480
+        },
+        {
+          "fichier": "Katherine (Seton Anya) (Z-Library).epub",
+          "taille": 733397
+        },
+        {
+          "fichier": "Life A Users Manual (Georges Perec) (Z-Library).epub",
+          "taille": 1224582
+        },
+        {
+          "fichier": "Life and Fate (Vasily Grossman) (Z-Library).epub",
+          "taille": 1454690
+        },
+        {
+          "fichier": "Love Forms (Claire Adam) (Z-Library).epub",
+          "taille": 874988
+        },
+        {
+          "fichier": "Marriage of a Thousand Lies (SJ Sindu) (Z-Library).epub",
+          "taille": 812226
+        },
+        {
+          "fichier": "Misinterpretation (Ledia Xhoga) (Z-Library).epub",
+          "taille": 1868173
+        },
+        {
+          "fichier": "One Boat (Jonathan Buckley) (Z-Library).epub",
+          "taille": 175245
+        },
+        {
+          "fichier": "Paradise Logic (Sophie Kemp) (Z-Library).epub",
+          "taille": 7051015
+        },
+        {
+          "fichier": "Pizza Girl (Jean Kyoung Frazier) (Z-Library).epub",
+          "taille": 5588814
+        },
+        {
+          "fichier": "Portrait Of An Unknown Lady (La Luz Negra) (Maria Gainza, Thomas Bunstead (translation)) (Z-Library).epub",
+          "taille": 3699276
+        },
+        {
+          "fichier": "Record of a Night too Brief (Hebi wo fumu) (Hiromi Kawakami, Lucy North (translation)) (Z-Library).epub",
+          "taille": 2140060
+        },
+        {
+          "fichier": "Room on the Sea (André Aciman) (Z-Library).epub",
+          "taille": 346713
+        },
+        {
+          "fichier": "Signora Da Vinci (Maxwell Robin) (Z-Library).epub",
+          "taille": 519967
+        },
+        {
+          "fichier": "Strange Houses (Uketsu, Jim Rion (translation)) (Z-Library).epub",
+          "taille": 24288878
+        },
+        {
+          "fichier": "Strange Pictures (Uketsu) (Z-Library).epub",
+          "taille": 21987653
+        },
+        {
+          "fichier": "Television for Women (Danit Brown) (Z-Library).epub",
+          "taille": 1316330
+        },
+        {
+          "fichier": "Tell Me I’m Worthless (Alison Rumfitt) (Z-Library).epub",
+          "taille": 468935
+        },
+        {
+          "fichier": "The Art Of Asking Your Boss For A Raise (Georges Perec) (Z-Library).epub",
+          "taille": 326943
+        },
+        {
+          "fichier": "The Artist (Lucy Steeds) (Z-Library).epub",
+          "taille": 1959478
+        },
+        {
+          "fichier": "The Betrothed (Alessandro Manzoni) (Z-Library).epub",
+          "taille": 1354408
+        },
+        {
+          "fichier": "The Birthday Party (Laurent Mauvignier, Daniel Levin Becker) (Z-Library).epub",
+          "taille": 458313
+        },
+        {
+          "fichier": "The Cost of Living - Early and Uncollected Stories (2009) [New York Review Books Classics] (Mavis Gallant, Jhumpa Lahiri (introduction)) (Z-Library).epub",
+          "taille": 454599
+        },
+        {
+          "fichier": "The Dead Girls Class Trip (NYRB, 2021) (Anna Seghers etc.) (Z-Library).epub",
+          "taille": 1171560
+        },
+        {
+          "fichier": "The Enchanted April (Elizabeth von Arnim) (Z-Library).epub",
+          "taille": 393651
+        },
+        {
+          "fichier": "The Factory (Kōjō) (Hiroko Oyamada, David Boyd (translation)) (Z-Library).epub",
+          "taille": 139600
+        },
+        {
+          "fichier": "The Faster I Walk, the Smaller I Am (Kjersti Skomsvold) (Z-Library).epub",
+          "taille": 169893
+        },
+        {
+          "fichier": "The Guest Cat (Neko no Kyaku) (Takashi Hiraide, Eric Selland (translation)) (Z-Library).epub",
+          "taille": 369499
+        },
+        {
+          "fichier": "The Hearing Test (Eliza Barry Callahan) (Z-Library).epub",
+          "taille": 813109
+        },
+        {
+          "fichier": "The House on Via Gemito (Domenico Starnone etc.) (z-library.sk, 1lib.sk, z-lib.sk) 2.epub",
+          "taille": 1797512
+        },
+        {
+          "fichier": "The Land in Winter (Andrew Miller) (Z-Library).epub",
+          "taille": 2146867
+        },
+        {
+          "fichier": "The Life Cycle of the Common Octopus A Novel (Emma Knight) (Z-Library).epub",
+          "taille": 1606772
+        },
+        {
+          "fichier": "The List of My Desires (Delacourt Gregoire) (Z-Library).epub",
+          "taille": 269353
+        },
+        {
+          "fichier": "The Man Who Died Seven Times (Nanakai Shinda Otoko) (Yasuhiko Nishizawa etc.) (Z-Library).epub",
+          "taille": 927047
+        },
+        {
+          "fichier": "The Nights Are Quiet in Tehran (Shida Bazyar, Ruth Martin (translator)) (z-library.sk, 1lib.sk, z-lib.sk).epub",
+          "taille": 716075
+        },
+        {
+          "fichier": "The Only Sound Is the Wind (Pascha Sotolongo) (Z-Library).epub",
+          "taille": 2659213
+        },
+        {
+          "fichier": "The Painted Room (Inger Christensen) (Z-Library).epub",
+          "taille": 3086056
+        },
+        {
+          "fichier": "The Princess of 72nd Street (Modern Library Torchbearers) (Elaine Kraf, Melissa Broder (introduction)) (Z-Library).epub",
+          "taille": 1690379
+        },
+        {
+          "fichier": "The Rest of Our Lives (Benjamin Markovits) (Z-Library).epub",
+          "taille": 242082
+        },
+        {
+          "fichier": "The Satisfaction Café (Kathy Wang) (Z-Library).epub",
+          "taille": 2707326
+        },
+        {
+          "fichier": "The South (Tash Aw) (Z-Library).epub",
+          "taille": 1479183
+        },
+        {
+          "fichier": "The Stone Door (Leonora Carrington) (Z-Library).epub",
+          "taille": 1879923
+        },
+        {
+          "fichier": "The Unknown Masterpiece (Honoré de Balzac) (Z-Library).epub",
+          "taille": 815446
         }
       ]
     }
