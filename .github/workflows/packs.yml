@@ -1,0 +1,112 @@
+# Index des packs — reconstruit automatiquement à chaque poussée qui
+# touche packs/. Le visiteur n'a rien à faire : déposer un pack,
+# pousser, l'index suit. Vos titres et descriptions édités à la main
+# dans packs/index.json sont conservés (seule la liste des fichiers
+# est recalculée).
+name: Index des packs
+
+on:
+  push:
+    paths:
+      - 'packs/**'
+      - '.github/workflows/packs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: packs-index
+  cancel-in-progress: false
+
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruire packs/index.json
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+
+          RACINE = 'packs'
+          INDEX = os.path.join(RACINE, 'index.json')
+          LIVRES = ('.epub', '.pdf')
+
+          # Titres et descriptions écrits à la main : conservés par id.
+          avant = {}
+          if os.path.exists(INDEX):
+              try:
+                  with open(INDEX, encoding='utf-8') as f:
+                      for p in json.load(f).get('packs', []):
+                          if isinstance(p, dict) and p.get('id'):
+                              avant[p['id']] = p
+              except Exception:
+                  pass
+
+          def joli(nom):
+              mots = nom.replace('-', ' ').replace('_', ' ').split()
+              return ' '.join(m[:1].upper() + m[1:] for m in mots) or nom
+
+          packs = []
+          for nom in sorted(os.listdir(RACINE)):
+              chemin = os.path.join(RACINE, nom)
+              if nom.startswith('.') or nom.endswith('.json') or nom.endswith('.md'):
+                  continue
+              if os.path.isdir(chemin):
+                  livres = []
+                  for racine, _dossiers, fichiers in os.walk(chemin):
+                      for f in sorted(fichiers):
+                          if f.lower().endswith(LIVRES) and not f.startswith('.'):
+                              pf = os.path.join(racine, f)
+                              livres.append({
+                                  'fichier': os.path.relpath(pf, chemin).replace(os.sep, '/'),
+                                  'taille': os.path.getsize(pf),
+                              })
+                  ordre = {l['fichier']: l for l in livres}
+                  livres = [ordre[k] for k in sorted(ordre)]
+                  packs.append({
+                      'id': nom,
+                      'titre': avant.get(nom, {}).get('titre') or joli(nom),
+                      'description': avant.get(nom, {}).get('description', ''),
+                      'type': 'dossier',
+                      'source': f'{RACINE}/{nom}/',
+                      'livres': livres,
+                  })
+              elif nom.lower().endswith('.zip'):
+                  packs.append({
+                      'id': nom[:-4],
+                      'titre': avant.get(nom[:-4], {}).get('titre') or joli(nom[:-4]),
+                      'description': avant.get(nom[:-4], {}).get('description', ''),
+                      'type': 'zip',
+                      'source': f'{RACINE}/{nom}',
+                      'taille': os.path.getsize(chemin),
+                  })
+
+          doc = {'genere': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'), 'packs': packs}
+          nouveau = json.dumps(doc, ensure_ascii=False, indent=2) + '\n'
+          ancien = None
+          if os.path.exists(INDEX):
+              with open(INDEX, encoding='utf-8') as f:
+                  ancien = f.read()
+          if nouveau != ancien:
+              with open(INDEX, 'w', encoding='utf-8') as f:
+                  f.write(nouveau)
+              print('index.json mis à jour :', len(packs), 'pack(s)')
+          else:
+              print('index.json déjà à jour')
+          PY
+
+      - name: Pousser l'index s'il a changé
+        run: |
+          if [ -z "$(git status --porcelain packs/index.json)" ]; then
+            echo "Rien à pousser."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add packs/index.json
+            git commit -m "packs : mise à jour de l'index"
+            git push
+          fi
