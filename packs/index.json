@@ -1,0 +1,22 @@
+{
+  "genere": "2026-11-10 22:10 UTC",
+  "packs": [
+    {
+      "id": "classiques-de-la-nuit",
+      "titre": "Classiques de la nuit",
+      "description": "Un pack de démonstration : deux petits livres pour essayer l'import, supprimez-le quand vous voulez.",
+      "type": "dossier",
+      "source": "packs/classiques-de-la-nuit/",
+      "livres": [
+        {
+          "fichier": "contes-en-pleine-lune.epub",
+          "taille": 38449
+        },
+        {
+          "fichier": "notes-de-veille.pdf",
+          "taille": 47569
+        }
+      ]
+    }
+  ]
+}
