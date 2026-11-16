@@ -8,6 +8,8 @@ NC.db = (() => {
   const BACKUP_STORES = ['books', 'annotations', 'bookmarks', 'history',
     'readstats', 'progress', 'prefs', 'bookmeta', 'groups', 'settings'];
   const BACKUP_TIMESTAMPS = { progress: 'lastOpened', prefs: 'updatedAt', bookmeta: 'updatedAt' };
+  const catalogChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel(NAME) : null;
+  const catalogChanged = () => catalogChannel?.postMessage('catalog');
   let dbPromise = null;
 
   function open() {
@@ -115,7 +117,113 @@ NC.db = (() => {
     }));
   }
 
+  function update(name, id, change, bookId) {
+    const stores = bookId === undefined ? [name] : ['books', name];
+    return open().then((db) => new Promise((resolve, reject) => {
+      const t = db.transaction(stores, 'readwrite');
+      const store = t.objectStore(name);
+      let result;
+      let failure;
+      t.oncomplete = () => resolve(result);
+      t.onabort = () => reject(failure || t.error || new Error('Écriture annulée'));
+      function read() {
+        const request = store.get(id);
+        request.onsuccess = () => {
+          try {
+            result = change(request.result);
+            if (result && result !== request.result) store.put(result);
+          } catch (error) {
+            failure = error;
+            t.abort();
+          }
+        };
+      }
+      if (bookId === undefined) read();
+      else {
+        const exists = t.objectStore('books').getKey(bookId);
+        exists.onsuccess = () => { if (exists.result !== undefined) read(); };
+      }
+    }));
+  }
+
+  function saveForBook(name, rows, bookId, matchesExisting) {
+    return open().then((db) => new Promise((resolve, reject) => {
+      const t = db.transaction(['books', name], 'readwrite');
+      const exists = t.objectStore('books').getKey(bookId);
+      let failure;
+      let saved;
+      t.oncomplete = () => resolve(saved);
+      t.onabort = () => reject(failure || t.error || new Error('Écriture annulée'));
+      function write(work) {
+        try {
+          work();
+        } catch (error) {
+          failure = error;
+          t.abort();
+        }
+      }
+      const store = t.objectStore(name);
+      exists.onsuccess = () => write(() => {
+        if (exists.result === undefined) throw new Error('Livre introuvable');
+        if (!matchesExisting) {
+          for (const row of rows) store.put(row);
+          return;
+        }
+        const request = store.index('bookId').getAll(bookId);
+        request.onsuccess = () => write(() => {
+          saved = request.result.find(matchesExisting);
+          if (!saved) {
+            saved = rows[0];
+            store.put(saved);
+          }
+        });
+      });
+    }));
+  }
+
+  function notifyCatalog(promise) {
+    return promise.then((result) => {
+      catalogChanged();
+      return result;
+    });
+  }
+
+  function notifyReader(promise, bookId) {
+    return promise.then((result) => {
+      catalogChannel?.postMessage({ bookId });
+      return result;
+    });
+  }
+
   return {
+    onCatalogChange: (listener) => catalogChannel?.addEventListener('message', (event) => {
+      if (event.data === 'catalog') listener();
+    }),
+    onReaderChange: (listener) => catalogChannel?.addEventListener('message', (event) => {
+      if (event.data?.bookId !== undefined) listener(event.data.bookId);
+    }),
+    catalogSnapshot: () => open().then((db) => new Promise((resolve, reject) => {
+      const stores = ['books', 'progress', 'groups', 'bookmeta'];
+      const t = db.transaction(stores, 'readonly');
+      const result = { books: [] };
+      t.oncomplete = () => resolve(result);
+      t.onabort = () => reject(t.error || new Error('Lecture du catalogue annulée'));
+      for (const name of stores.slice(1)) {
+        const request = t.objectStore(name).getAll();
+        request.onsuccess = () => { result[name] = request.result; };
+      }
+      const store = t.objectStore('books');
+      const batchSize = 16;
+      function next(range) {
+        const request = store.getAll(range, batchSize);
+        request.onsuccess = () => {
+          const rows = request.result;
+          for (const { data, ...metadata } of rows) result.books.push(metadata);
+          if (rows.length === batchSize) next(IDBKeyRange.lowerBound(rows[rows.length - 1].id, true));
+        };
+      }
+      next();
+    })),
     backupSnapshot: () => open().then((db) => new Promise((resolve, reject) => {
       const t = db.transaction(BACKUP_STORES, 'readonly');
       const state = {};
@@ -129,7 +237,7 @@ NC.db = (() => {
     restoreBackup: (state, replace) => open().then((db) => new Promise((resolve, reject) => {
       const t = db.transaction(BACKUP_STORES, 'readwrite');
       const counts = { booksAdded: 0, booksKept: 0 };
-      t.oncomplete = () => resolve(counts);
+      t.oncomplete = () => { catalogChanged(); resolve(counts); };
       t.onabort = () => reject(t.error || new Error('Restauration annulée'));
 
       function write(store, row, count) {
@@ -175,7 +283,8 @@ NC.db = (() => {
     countBooks: () => reqToPromise('books', 'readonly', (s) => s.count()),
     allBooks: () => reqToPromise('books', 'readonly', (s) => s.getAll()),
     getBook: (id) => reqToPromise('books', 'readonly', (s) => s.get(id)),
-    putBook: (book) => tx('books', 'readwrite', (s) => s.put(book)),
+    putBook: (book) => notifyCatalog(tx('books', 'readwrite', (s) => s.put(book))),
+    patchBook: (id, fields) => notifyCatalog(update('books', id, (row) => row && { ...row, ...fields })),
     deleteBook: (id) => tx('books', 'readwrite', (s) => s.delete(id)),
     /* Suppression transactionnelle du livre ET de toutes ses données
        associées (annotations, progression, signets, historique,
@@ -212,7 +321,11 @@ NC.db = (() => {
         const c = curs.result;
         if (c) { c.delete(); c.continue(); }
       };
-      t.oncomplete = () => resolve();
+      t.oncomplete = () => {
+        catalogChanged();
+        catalogChannel?.postMessage({ bookId: id });
+        resolve();
+      };
       t.onerror = () => reject(t.error);
       t.onabort = () => reject(t.error);
     })),
@@ -224,8 +337,11 @@ NC.db = (() => {
       .then((all) => (Array.isArray(all) ? all : [])
         .filter((a) => a.bookId === bookId)
         .sort((a, b) => a.createdAt - b.createdAt)),
-    putAnnotation: (a) => tx('annotations', 'readwrite', (s) => s.put(a)),
-    deleteAnnotation: (id) => tx('annotations', 'readwrite', (s) => s.delete(id)),
+    putAnnotation: (a) => notifyReader(saveForBook('annotations', [a], a.bookId), a.bookId),
+    putAnnotations: (bookId, rows) => notifyReader(saveForBook('annotations', rows, bookId), bookId),
+    patchAnnotation: (id, fields, bookId) => notifyReader(
+      update('annotations', id, (row) => row && { ...row, ...fields }), bookId),
+    deleteAnnotation: (id, bookId) => notifyReader(tx('annotations', 'readwrite', (s) => s.delete(id)), bookId),
     /* Lectures complètes pour la sauvegarde (V2.25) : l'export et la
        restauration parcourent chaque magasin sans se soucier du livre. */
     allAnnotations: () => reqToPromise('annotations', 'readonly', (s) => s.getAll()),
@@ -244,18 +360,27 @@ NC.db = (() => {
     getPrefs: (bookId) => reqToPromise('prefs', 'readonly', (s) => s.get(bookId)),
     allPrefs: () => reqToPromise('prefs', 'readonly', (s) => s.getAll()),
     putPrefs: (p) => tx('prefs', 'readwrite', (s) => s.put(p)),
+    patchPrefs: (id, fields) => update('prefs', id, (row) => {
+      const next = { ...row, ...fields, id, updatedAt: Date.now() };
+      if (fields.typo) next.typo = { ...row?.typo, ...fields.typo };
+      return next;
+    }, id),
 
     /* ── Progression de lecture (un petit enregistrement par livre) ── */
     getProgress: (id) => reqToPromise('progress', 'readonly', (s) => s.get(id)),
     allProgress: () => reqToPromise('progress', 'readonly', (s) => s.getAll()),
-    putProgress: (p) => tx('progress', 'readwrite', (s) => s.put(p)),
+    putProgress: (p) => update('progress', p.id, (row) =>
+      row && (row.lastOpened || 0) > p.lastOpened ? row : p, p.id),
 
     /* ── Signets (n°8) : les repères posés par le lecteur, par livre ── */
     bookmarksFor: (bookId) => reqToPromise('bookmarks', 'readonly', (s) =>
         s.indexNames.contains('bookId') ? s.index('bookId').getAll(bookId) : s.getAll())
       .then((all) => (Array.isArray(all) ? all : []).filter((b) => b.bookId === bookId)),
-    putBookmark: (b) => tx('bookmarks', 'readwrite', (s) => s.put(b)),
-    deleteBookmark: (id) => tx('bookmarks', 'readwrite', (s) => s.delete(id)),
+    putBookmark: (b) => notifyReader(saveForBook('bookmarks', [b], b.bookId, (row) =>
+      b.page ? row.page === b.page :
+        typeof b.sectionIndex === 'number' && row.sectionIndex === b.sectionIndex &&
+        (b.pageInSec == null || row.pageInSec == null || row.pageInSec === b.pageInSec)), b.bookId),
+    deleteBookmark: (id, bookId) => notifyReader(tx('bookmarks', 'readwrite', (s) => s.delete(id)), bookId),
 
     /* ── Historique des passages (n°9) ──
        addHistory écrit puis borne le journal du livre aux « cap »
@@ -267,7 +392,7 @@ NC.db = (() => {
       .then((all) => (Array.isArray(all) ? all : [])
         .filter((h) => h.bookId === bookId)
         .sort((a, b) => b.at - a.at)),
-    addHistory: (entry, cap) => tx('history', 'readwrite', (s) => s.put(entry))
+    addHistory: (entry, cap) => saveForBook('history', [entry], entry.bookId)
       .then(() => reqToPromise('history', 'readonly', (s) =>
           s.indexNames.contains('bookId') ? s.index('bookId').getAll(entry.bookId) : s.getAll()))
       .then((all) => {
@@ -298,19 +423,13 @@ NC.db = (() => {
        { id: 'livre|2026-11-10', bookId, date, seconds, pages, firstAt, lastAt }.
        Le suivi de lecture écrit par additions (get → additionner → put) :
        plusieurs sessions le même jour se cumulent, jamais d'écrasement. */
-    addReadStat: (sample) => tx('readstats', 'readwrite', (s) => {
-      const r = s.get(sample.id);
-      r.onsuccess = () => {
-        const row = r.result || sample;
-        if (r.result) {
-          row.seconds = (row.seconds || 0) + sample.seconds;
-          row.pages = (row.pages || 0) + sample.pages;
-          row.firstAt = Math.min(row.firstAt || sample.firstAt, sample.firstAt);
-          row.lastAt = Math.max(row.lastAt || 0, sample.lastAt);
-        }
-        s.put(row);
-      };
-    }),
+    addReadStat: (sample) => update('readstats', sample.id, (row) => row ? {
+      ...row,
+      seconds: (row.seconds || 0) + sample.seconds,
+      pages: (row.pages || 0) + sample.pages,
+      firstAt: Math.min(row.firstAt || sample.firstAt, sample.firstAt),
+      lastAt: Math.max(row.lastAt || 0, sample.lastAt),
+    } : sample, sample.bookId),
     readStatsFor: (bookId) => reqToPromise('readstats', 'readonly', (s) =>
         s.indexNames.contains('bookId') ? s.index('bookId').getAll(bookId) : s.getAll())
       .then((all) => (Array.isArray(all) ? all : [])
@@ -329,9 +448,20 @@ NC.db = (() => {
     getBookMeta: (id) => reqToPromise('bookmeta', 'readonly', (s) => s.get(id)),
     allBookMeta: () => reqToPromise('bookmeta', 'readonly', (s) => s.getAll()),
     putBookMeta: (m) => tx('bookmeta', 'readwrite', (s) => s.put(m)),
+    changeBookMeta: (id, fields, { keepFinished = false } = {}) =>
+      notifyCatalog(update('bookmeta', id, (row) => {
+        const previousStatus = NC.normStatus(row?.status);
+        if (keepFinished && previousStatus === 'termine') return row;
+        const next = { ...row, ...fields, id, updatedAt: Date.now() };
+        if (fields.status && fields.status !== previousStatus) {
+          next.statusAt = fields.status === 'termine' ? next.updatedAt : null;
+        }
+        return next;
+      }, id)),
 
     allGroups: () => reqToPromise('groups', 'readonly', (s) => s.getAll()),
-    putGroup: (g) => tx('groups', 'readwrite', (s) => s.put(g)),
+    putGroup: (g) => notifyCatalog(tx('groups', 'readwrite', (s) => s.put(g))),
+    renameGroup: (id, name) => notifyCatalog(update('groups', id, (row) => row && { ...row, name })),
     /* Supprimer un groupe rend ses livres : la même transaction retire
        le groupe ET démonte groupId sur les fiches concernées — aucun
        livre orphelin référençant un groupe disparu. */
@@ -349,7 +479,7 @@ NC.db = (() => {
           c.continue();
         }
       };
-      t.oncomplete = () => resolve();
+      t.oncomplete = () => { catalogChanged(); resolve(); };
       t.onerror = () => reject(t.error);
       t.onabort = () => reject(t.error);
     })),

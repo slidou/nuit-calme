@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -14,20 +14,40 @@ const browser = process.env.NC_BROWSER || (process.platform === 'win32'
 const profile = await mkdtemp(join(tmpdir(), 'nuit-calme-test-'));
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
   '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2', '.png': 'image/png' };
+const baseline = process.env.NC_BENCHMARK && process.env.NC_BASE_REF;
+const baselineFiles = new Map();
+let release = 1;
+let missingAsset = false;
+let missingRequests = 0;
 
 const server = createServer(async (req, res) => {
   const path = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
   if (!path.startsWith('/liseuse/')) { res.writeHead(404).end(); return; }
   const file = resolve(root, path.slice('/liseuse/'.length) || 'index.html');
   if (!file.startsWith(resolve(root) + sep)) { res.writeHead(403).end(); return; }
+  if (missingAsset && path.endsWith('/css/style.css')) { missingRequests++; res.writeHead(503).end(); return; }
   try {
-    const body = await readFile(file);
+    let body;
+    if (baseline) {
+      const relative = file.slice(resolve(root).length + 1).split(sep).join('/');
+      if (!baselineFiles.has(relative)) baselineFiles.set(relative, execFileSync(
+        'git', ['show', `${baseline}:${relative}`], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 8 << 20 }));
+      body = baselineFiles.get(relative);
+    } else {
+      body = await readFile(file);
+      if (file === join(root, 'index.html')) {
+        body = body.toString().replace('</head>', `<meta name="test-release" content="${release}"></head>`);
+      } else if (file === join(root, 'sw.js') && release > 1) {
+        body = body.toString().replace(/(const CACHE = .+?)';/, `$1-test-${release}';`);
+      }
+    }
     res.writeHead(200, { 'Content-Type': types[extname(file)] || 'application/octet-stream' }).end(body);
   } catch { res.writeHead(404).end(); }
 });
 await new Promise((ready) => server.listen(0, '127.0.0.1', ready));
 const url = `http://127.0.0.1:${server.address().port}/liseuse/`;
 const proc = spawn(browser, ['--headless=new', '--disable-gpu', '--no-first-run',
+  '--disable-features=BackForwardCache',
   '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'],
 { stdio: ['ignore', 'ignore', 'pipe'] });
 let launchError;
@@ -89,7 +109,69 @@ async function connect(url) {
   return { send, run, close: () => socket.close() };
 }
 
+async function benchmark(cdp) {
+  await cdp.send('Page.enable');
+  await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `
+    const observer = new MutationObserver(() => {
+      if (document.querySelector('#book-grid .card')) {
+        window.firstCardMs = performance.now();
+        observer.disconnect();
+      }
+    });
+    observer.observe(document, { childList: true, subtree: true });
+  ` });
+  console.log(JSON.stringify({ source: baseline || 'workspace', bytesPerBook: 131072, iterations: 3 }));
+  for (const count of [100, 300, 1000]) {
+    await cdp.run(`(async () => {
+      const state = await NC.db.backupSnapshot();
+      const data = new ArrayBuffer(131072);
+      const cover = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="160" height="220"%3E%3Crect width="160" height="220" fill="navy"/%3E%3C/svg%3E';
+      state.books = Array.from({length: ${count}}, (_, i) => ({
+        id: 'perf-' + i, title: 'Volume ' + i, author: 'Autrice ' + (i % 24),
+        type: 'epub', cover, addedAt: i + 1, data, size: data.byteLength
+      }));
+      state.groups = Array.from({length: 24}, (_, i) => ({ id: 'g' + i, name: 'Rayon ' + i, order: i }));
+      state.bookmeta = state.books.map((book, i) => ({ id: book.id, groupId: 'g' + (i % 24), status: 'encours' }));
+      await NC.db.restoreBackup(state, true);
+    })()`);
+    const samples = [];
+    for (let i = 0; i < 3; i++) {
+      await cdp.send('Page.navigate', { url: url + '?perf=' + count + '-' + i });
+      await until(() => cdp.run(`location.search === '?perf=${count}-${i}' && typeof NC_DEBUG !== 'undefined'`));
+      const sample = await cdp.run(`(async () => {
+        const grid = document.querySelector('#book-grid');
+        const frame = () => new Promise(requestAnimationFrame);
+        await frame();
+        const boot = window.firstCardMs;
+        while (grid.childElementCount < ${count}) await frame();
+        const input = document.querySelector('#lib-search');
+        input.value = 'Volume';
+        const start = performance.now();
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        while (!document.querySelector('#lib-count').textContent.includes(' sur ')) await frame();
+        const first = performance.now() - start;
+        while (grid.childElementCount < ${count}) await frame();
+        return { boot, first, full: performance.now() - start };
+      })()`);
+      await cdp.send('HeapProfiler.collectGarbage');
+      const heap = await cdp.send('Runtime.getHeapUsage');
+      samples.push({ ...sample, heap: heap.usedSize, backingStorage: heap.backingStorageSize });
+    }
+    console.log(JSON.stringify({ count, samples }));
+  }
+}
+
+async function openTab(cdp, port, url) {
+  const { targetId } = await cdp.send('Target.createTarget', { url });
+  const target = await until(async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+    return (await response.json()).find((tab) => tab.id === targetId);
+  });
+  return { targetId, tab: await connect(target.webSocketDebuggerUrl) };
+}
+
 let cdp;
+let other;
 try {
   const port = await until(async () => {
     if (launchError) throw launchError;
@@ -102,6 +184,10 @@ try {
   await cdp.send('Page.navigate', { url });
   await until(() => cdp.run("typeof NC_DEBUG !== 'undefined' && Boolean(navigator.serviceWorker.controller)"));
   console.log('OK — lancement de la liseuse sous /liseuse/ et activation du service worker.');
+
+  if (process.env.NC_BENCHMARK) {
+    await benchmark(cdp);
+  } else {
 
   const result = await cdp.run(`(${async function scenario() {
     function check(condition, message) { if (!condition) throw new Error(message); }
@@ -143,10 +229,14 @@ try {
     await NC.reader.open(ebook.id);
     check(NC.reader._state().ctl.type === 'epub', 'Ouverture EPUB');
     check((await NC.reader._state().ctl.search('phare')).length > 0, 'Recherche EPUB');
+    check((await NC.reader._state().ctl.search('phare', null, AbortSignal.abort())).length === 0,
+      'Recherche EPUB annulée');
     await NC.reader.close();
     await NC.reader.open(paper.id);
     check(NC.reader._state().ctl.type === 'pdf', 'Ouverture PDF');
     check((await NC.reader._state().ctl.search('phare')).length === 2, 'Recherche PDF');
+    check((await NC.reader._state().ctl.search('phare', null, AbortSignal.abort())).length === 0,
+      'Recherche PDF annulée');
     await NC.reader._state().ctl.gotoPage(2);
     await NC.reader.close();
     await NC.reader.open(paper.id);
@@ -165,6 +255,27 @@ try {
     try { await NC.backup.importFile(incomplete, 'replace'); } catch { refused = true; }
     check(refused && await NC.db.countBooks() === 2, 'Archive incomplète rejetée sans perte');
     check(JSON.parse(localStorage.getItem('nc.reading-goal')).target === 3, 'Objectif conservé après échec');
+    const corrupt = new Uint8Array(await blob.arrayBuffer());
+    const directory = new DataView(corrupt.buffer);
+    for (let i = 0; i < corrupt.length - 46; i++) {
+      if (directory.getUint32(i, true) !== 0x02014b50) continue;
+      const name = new TextDecoder().decode(corrupt.subarray(i + 46, i + 46 + directory.getUint16(i + 28, true)));
+      if (name === 'books/' + ebook.id + '.epub') {
+        corrupt[i + 16] ^= 1;
+        break;
+      }
+    }
+    refused = false;
+    try { await NC.backup.importFile(new Blob([corrupt]), 'replace'); }
+    catch (error) { refused = error.message.includes('Intégrité ZIP'); }
+    check(refused && await NC.db.countBooks() === 2, 'CRC erroné rejeté sans perte');
+
+    const traversal = new JSZip();
+    traversal.file('../manifest.json', '{}');
+    refused = false;
+    try { await NC.archive.load(await traversal.generateAsync({ type: 'blob' }), 'backup'); }
+    catch (error) { refused = error.message.includes('Chemin invalide'); }
+    check(refused, 'Chemin réécrit par JSZip rejeté');
 
     const badWrite = { ...await NC.db.backupSnapshot(), annotations: [{ text: 'clé absente' }] };
     refused = false;
@@ -232,6 +343,66 @@ try {
   console.log('OK — EPUB et PDF, recherche, reprise PDF, sauvegarde, fusion, remplacement, retour arrière, statistiques.');
   console.log('OK — pack ZIP avec entrée invalide, import sans doublon et actions accessibles au focus.');
 
+  const second = await openTab(cdp, port, url + '?deuxieme');
+  other = second.tab;
+  await until(() => other.run("typeof NC_DEBUG !== 'undefined' && document.querySelectorAll('.card').length === 2"));
+  const bookKey = JSON.stringify(result);
+  await cdp.run("NC.db.putGroup({ id: 'rayon-essai', name: 'Rayon essai', order: 1 })");
+  await Promise.all([
+    cdp.run(`NC.db.changeBookMeta(${bookKey}, {groupId: 'rayon-essai'})`),
+    other.run(`NC.db.changeBookMeta(${bookKey}, {status: 'termine'})`),
+  ]);
+  const metadata = await cdp.run(`NC.db.getBookMeta(${bookKey})`);
+  assert.equal(metadata.groupId, 'rayon-essai');
+  assert.equal(metadata.status, 'termine');
+  await cdp.run(`NC.db.patchBook(${bookKey}, {title: 'Titre partagé'})`);
+  await until(() => other.run("Array.from(document.querySelectorAll('.card-title')).some(x => x.textContent === 'Titre partagé')"));
+  await cdp.run(`NC.db.putAnnotation({id: 'concurrent-note', bookId: ${bookKey}, note: 'initiale'})`);
+  await Promise.all([
+    cdp.run(`NC.db.patchAnnotation('concurrent-note', {color: 'or'}, ${bookKey})`),
+    other.run(`NC.db.patchAnnotation('concurrent-note', {note: 'mise à jour'}, ${bookKey})`),
+  ]);
+  const note = await other.run(`NC.db.annotationsFor(${bookKey}).then(rows => rows.find(x => x.id === 'concurrent-note'))`);
+  assert.equal(note.color, 'or');
+  assert.equal(note.note, 'mise à jour');
+  await other.run(`NC.db.putProgress({id: ${bookKey}, lastPage: 1, lastOpened: 1})`);
+  assert.equal(await cdp.run(`NC.db.getProgress(${bookKey}).then(row => row.lastPage)`), 2);
+  const ids = await Promise.all([cdp, other].map((page, i) => page.run(
+    `NC.db.putBookmark({id: 'concurrent-${i}', bookId: ${bookKey}, page: 1}).then(row => row.id)`)));
+  assert.equal(ids[0], ids[1]);
+  const epubId = JSON.stringify(await cdp.run("NC.db.allBooks().then(rows => rows.find(b => b.type === 'epub').id)"));
+  const originalEpub = await other.run(`(async () => {
+    window.originalEpub = await NC.db.getBook(${epubId});
+    return originalEpub.id;
+  })()`);
+  assert.equal(JSON.stringify(originalEpub), epubId);
+  await cdp.run(`NC.db.deleteBookCascade(${epubId})`);
+  assert.equal(await other.run(`NC.db.patchBook(${epubId}, {title:'fantôme'})`), undefined);
+  assert.equal(await other.run(`NC.db.putProgress({id:${epubId},lastOpened:Date.now()})`), undefined);
+  await other.run("NC.db.putBook(originalEpub)");
+  console.log('OK — deux onglets, modifications par champ, notification, progression, signets dédupliqués et suppression.');
+
+  const quota = await cdp.run(`(async () => {
+    const state = await NC.db.backupSnapshot();
+    const originalPut = IDBObjectStore.prototype.put;
+    let writes = 0;
+    IDBObjectStore.prototype.put = function (value) {
+      if (this.name === 'books' && ++writes === 2) {
+        throw new DOMException('Quota de test', 'QuotaExceededError');
+      }
+      return originalPut.call(this, value);
+    };
+    try { await NC.db.restoreBackup(state, true); }
+    catch (error) { return error.name; }
+    finally { IDBObjectStore.prototype.put = originalPut; }
+    return 'success';
+  })()`);
+  assert.equal(quota, 'QuotaExceededError');
+  assert.equal(await cdp.run('NC.db.countBooks()'), 2);
+  assert.equal(await cdp.run(`NC.db.getBook(${bookKey}).then(b => b.title)`), 'Titre partagé');
+  console.log('OK — QuotaExceededError injectée sur le deuxième livre, restauration annulée sans perte.');
+
+  await cdp.send('Page.bringToFront');
   const contents = await cdp.run(`(async () => {
     await caches.open('cache-autre-application');
     await fetch('packs/index.json');
@@ -254,10 +425,39 @@ try {
     return page;
   })()`), 2);
   console.log('OK — cache limité à la liseuse et reprise PDF après navigation hors ligne.');
+
+  await cdp.send('Network.emulateNetworkConditions', {
+    offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1,
+  });
+  release = 2;
+  missingAsset = true;
+  await other.run("navigator.serviceWorker.ready.then(reg => reg.update()).then(() => true)");
+  await until(() => missingRequests > 0);
+  await until(() => other.run("navigator.serviceWorker.ready.then(reg => !reg.installing && !reg.waiting)"));
+  await cdp.send('Page.navigate', { url: url + '?cache-ancienne' });
+  await until(() => cdp.run("location.search === '?cache-ancienne' && typeof NC_DEBUG !== 'undefined'"));
+  assert.equal(await cdp.run("document.querySelector('meta[name=test-release]').content"), '1');
+  missingAsset = false;
+  release = 3;
+  await other.run("navigator.serviceWorker.ready.then(reg => reg.update()).then(() => true)");
+  await until(() => other.run("navigator.serviceWorker.ready.then(reg => Boolean(reg.waiting))"));
+  assert.equal(await cdp.run("document.querySelector('meta[name=test-release]').content"), '1');
+  await cdp.send('Target.closeTarget', { targetId: second.targetId });
+  other.close();
+  other = null;
+  await cdp.send('Page.navigate', { url: 'about:blank' });
+  await delay(800);
+  await cdp.send('Page.navigate', { url: url + '?cache-nouveau' });
+  await until(() => cdp.run("location.search === '?cache-nouveau' && typeof NC_DEBUG !== 'undefined'"));
+  assert.equal(await cdp.run("document.querySelector('meta[name=test-release]').content"), '3');
+  assert.equal(await cdp.run('NC.db.countBooks()'), 2);
+  console.log('OK — installation incomplète, attente avec deux onglets puis activation et données intactes.');
+  }
 } catch (error) {
   if (browserLog) console.error(browserLog);
   throw error;
 } finally {
+  other?.close();
   cdp?.close();
   if (proc.exitCode === null && !launchError) {
     proc.kill();

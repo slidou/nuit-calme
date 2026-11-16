@@ -123,10 +123,7 @@ NC.reader = (() => {
       if (prefsRec && prefsRec.fontSize) {
         epubFont = prefsRec.fontSize;
       } else if (epubFont !== 100) {
-        const p = prefsRec || { id: rec.id };
-        p.fontSize = epubFont;
-        p.updatedAt = Date.now();
-        NC.db.putPrefs(p).catch(() => {});
+        NC.db.patchPrefs(rec.id, { fontSize: epubFont }).catch(() => {});
       }
     }
 
@@ -282,13 +279,9 @@ NC.reader = (() => {
      carte de la bibliothèque permet de tout reposer à la main. */
   async function initReadStatus(bookId) {
     try {
-      const m = await NC.db.getBookMeta(bookId);
-      statusNow = NC.normStatus(m && m.status);
-      if (statusNow !== 'termine') {
-        statusNow = 'encours';
-        await NC.db.putBookMeta(Object.assign({ id: bookId }, m || {},
-          { status: 'encours', updatedAt: Date.now() }));
-      }
+      const generation = openGen;
+      const row = await NC.db.changeBookMeta(bookId, { status: 'encours' }, { keepFinished: true });
+      if (generation === openGen && row) statusNow = NC.normStatus(row.status);
     } catch (e) { console.error('statut de lecture', e); }
   }
 
@@ -306,11 +299,15 @@ NC.reader = (() => {
     statusNow = 'termine';
     const bookId = current.id;
     const title = current.title;
-    NC.db.getBookMeta(bookId)
-      .then((m) => NC.db.putBookMeta(Object.assign({ id: bookId }, m || {},
-        { status: 'termine', statusAt: Date.now(), updatedAt: Date.now() })))
-      .then(() => NC.toast(`« ${title} » est terminé — marqué comme tel dans la bibliothèque.`, 'success', 3200))
-      .catch((e) => { statusNow = 'encours'; console.error('statut de lecture', e); });
+    const generation = openGen;
+    NC.db.changeBookMeta(bookId, { status: 'termine' })
+      .then((row) => {
+        if (row && generation === openGen) NC.toast(`« ${title} » est terminé — marqué comme tel dans la bibliothèque.`, 'success', 3200);
+      })
+      .catch((e) => {
+        if (generation === openGen) statusNow = 'encours';
+        console.error('statut de lecture', e);
+      });
   }
 
   /* ── Mode immersion (V2.17, gestes tactiles) ──
@@ -375,9 +372,11 @@ NC.reader = (() => {
 
   /* ── Tiroirs ── */
   let drawerKind = null;
+  let searchAbort;
 
   function openDrawer(kind) {
     if (!ctl) return;
+    searchAbort?.abort();
     hideTransient();
     showChrome(); // un tiroir s'ouvre : la barre du haut revient (contexte)
     drawerKind = kind;
@@ -397,6 +396,7 @@ NC.reader = (() => {
   }
 
   function closeDrawer() {
+    searchAbort?.abort();
     drawerKind = null;
     $('#drawer').hidden = true;
     $('#drawer-backdrop').hidden = true;
@@ -657,28 +657,37 @@ NC.reader = (() => {
     if (ribbon) ribbon.hidden = !here;
   }
 
+  let bookmarkWriting = false;
   async function toggleBookmark() {
-    if (!ctl || !current) return;
+    if (!ctl || !current || bookmarkWriting) return;
     const snap = currentSnapshot();
     if (!snap) { NC.toast('Position pas encore prête — un instant…', 'info', 1700); return; }
     const here = bookmarkAtPosition();
-    if (here) {
-      bookmarkCache = bookmarkCache.filter((b) => b.id !== here.id);
-      try { await NC.db.deleteBookmark(here.id); } catch (e) { console.error(e); }
-      NC.toast('Signet retiré.', 'info', 1600);
-    } else {
-      const bm = Object.assign({ id: crypto.randomUUID(), bookId: current.id, createdAt: Date.now() }, snap);
-      bookmarkCache.push(bm);
-      try { await NC.db.putBookmark(bm); } catch (e) { console.error(e); }
+    if (here) return removeBookmark(here);
+    const reader = ctl;
+    const bm = { id: crypto.randomUUID(), bookId: current.id, createdAt: Date.now(), ...snap };
+    bookmarkWriting = true;
+    try {
+      const saved = await NC.db.putBookmark(bm);
+      if (ctl !== reader) return;
+      if (!bookmarkCache.some((row) => row.id === saved.id)) bookmarkCache.push(saved);
       NC.toast('Signet posé — ' + (bm.label || 'ici') + '. Retrouvez-le dans le sommaire.', 'success', 2400);
+      updateBookmarkBtn();
+      if (drawerKind === 'toc') renderToc($('#drawer-body'));
+    } catch (error) {
+      NC.toast('Le signet n’a pas pu être enregistré.', 'error');
+    } finally {
+      bookmarkWriting = false;
     }
-    updateBookmarkBtn();
-    if (drawerKind === 'toc') renderToc($('#drawer-body'));
   }
 
   async function removeBookmark(bm) {
+    const reader = ctl;
+    try { await NC.db.deleteBookmark(bm.id, bm.bookId); }
+    catch (error) { NC.toast('Le signet n’a pas pu être retiré.', 'error'); return; }
+    if (ctl !== reader) return;
     bookmarkCache = bookmarkCache.filter((b) => b.id !== bm.id);
-    try { await NC.db.deleteBookmark(bm.id); } catch (e) { console.error(e); }
+    NC.toast('Signet retiré.', 'info', 1600);
     updateBookmarkBtn();
     if (drawerKind === 'toc') renderToc($('#drawer-body'));
   }
@@ -1172,12 +1181,16 @@ NC.reader = (() => {
       const q = input.value.trim();
       if (q.length < 2) { NC.toast('Saisissez au moins deux lettres.'); return; }
       running = true;
+      const reader = ctl;
+      const controller = new AbortController();
+      searchAbort = controller;
       list.innerHTML = '';
       status.textContent = 'Recherche en cours…';
       try {
-        const results = await ctl.search(q, (done, total) => {
+        const results = await reader.search(q, (done, total) => {
           status.textContent = `Recherche… ${Math.round((done / Math.max(1, total)) * 100)} %`;
-        });
+        }, controller.signal);
+        if (controller.signal.aborted || ctl !== reader) return;
         status.textContent = results.length
           ? `${results.length} passage${results.length > 1 ? 's' : ''} trouvé${results.length > 1 ? 's' : ''}.`
           : 'Aucun résultat dans ce livre.';
@@ -1188,7 +1201,7 @@ NC.reader = (() => {
           b.type = 'button';
           const chap = document.createElement('div');
           chap.className = 'res-chapter';
-          chap.textContent = ctl.type === 'pdf' ? `Page ${r.page}` : (r.chapter || 'Passage');
+          chap.textContent = reader.type === 'pdf' ? `Page ${r.page}` : (r.chapter || 'Passage');
           const snip = document.createElement('div');
           snip.className = 'res-snippet';
           snip.innerHTML = NC.esc(r.snippet).replace(
@@ -1197,18 +1210,22 @@ NC.reader = (() => {
           );
           b.append(chap, snip);
           b.addEventListener('click', async () => {
+            if (ctl !== reader) return;
             closeDrawer();
-            if (ctl.type === 'epub') await ctl.gotoCfi(r.target);
-            else await ctl.gotoPage(r.target);
+            if (reader.type === 'epub') await reader.gotoCfi(r.target);
+            else await reader.gotoPage(r.target);
           });
           li.appendChild(b);
           list.appendChild(li);
         }
       } catch (e) {
+        if (controller.signal.aborted) return;
         console.error(e);
         status.textContent = 'La recherche a échoué sur ce livre.';
+      } finally {
+        if (searchAbort === controller) searchAbort = null;
+        running = false;
       }
-      running = false;
     }
     btn.addEventListener('click', run);
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
@@ -1386,8 +1403,9 @@ NC.reader = (() => {
       del.type = 'button';
       del.textContent = 'Supprimer';
       del.addEventListener('click', async () => {
-        await ctl.removeHighlight(a);
-        renderNotes($('#drawer-body'));
+        try { await ctl.removeHighlight(a); }
+        catch (error) { NC.toast('L’annotation n’a pas pu être supprimée.', 'error'); }
+        if (drawerKind === 'notes') renderNotes($('#drawer-body'));
       });
       actions.append(del);
       foot.append(when, actions);
@@ -1420,8 +1438,9 @@ NC.reader = (() => {
         d.title = 'Passer en ' + meta.label.toLowerCase();
         d.setAttribute('aria-label', d.title);
         d.addEventListener('click', async () => {
-          try { await ctl.recolorHighlight(a, key); } catch (err) { console.error(err); }
-          renderNotes($('#drawer-body'));
+          try { await ctl.recolorHighlight(a, key); }
+          catch (error) { NC.toast('La couleur n’a pas pu être enregistrée.', 'error'); }
+          if (drawerKind === 'notes') renderNotes($('#drawer-body'));
         });
         colors.appendChild(d);
       });
@@ -1729,8 +1748,8 @@ NC.reader = (() => {
         else await ctl.addNote(noteDraft.cap, val);
         NC.toast(noteDraft.ann ? 'Note modifiée.' : 'Note enregistrée — le passage est repéré sous la ligne.', 'success', 2100);
       } catch (e) {
-        console.error(e);
         NC.toast('La note n\'a pas pu être enregistrée.', 'error');
+        return;
       }
       closeNoteEditor();
       if (drawerKind === 'notes') renderNotes($('#drawer-body'));
@@ -1884,10 +1903,7 @@ NC.reader = (() => {
     markTypoChips();
     try {
       if (current) {
-        const p = (await NC.db.getPrefs(current.id).catch(() => null)) || { id: current.id };
-        p.typo = t;
-        p.updatedAt = Date.now();
-        await NC.db.putPrefs(p);
+        await NC.db.patchPrefs(current.id, { typo: patch });
       }
     } catch (e) { console.error(e); }
     NC.db.putSetting('lastTypo', t).catch(() => {});
@@ -1954,10 +1970,7 @@ NC.reader = (() => {
     document.body.dataset.bookTheme = mode; // immédiat, y compris pour le PDF
     if (current) {
       try {
-        const p = (await NC.db.getPrefs(current.id).catch(() => null)) || { id: current.id };
-        p.theme = mode;
-        p.updatedAt = Date.now();
-        await NC.db.putPrefs(p);
+        await NC.db.patchPrefs(current.id, { theme: mode });
         NC.db.putSetting('lastBookTheme', mode).catch(() => {});
       } catch (e) { console.error(e); }
     }
@@ -2104,6 +2117,26 @@ NC.reader = (() => {
 
   /* ── Câblage ── */
   function init() {
+    let refreshReaderTimer;
+    NC.db.onReaderChange((bookId) => {
+      if (!ctl || current?.id !== bookId) return;
+      const reader = ctl;
+      clearTimeout(refreshReaderTimer);
+      refreshReaderTimer = setTimeout(async () => {
+        if (ctl !== reader) return;
+        try {
+          const [bookmarks] = await Promise.all([
+            NC.db.bookmarksFor(bookId),
+            reader.restoreHighlights(),
+          ]);
+          if (ctl !== reader) return;
+          bookmarkCache = bookmarks;
+          updateBookmarkBtn();
+          if (drawerKind === 'toc') renderToc($('#drawer-body'));
+          if (drawerKind === 'notes') renderNotes($('#drawer-body'));
+        } catch (error) { console.warn('Actualisation du lecteur', error); }
+      }, 80);
+    });
     $('#btn-back').addEventListener('click', () => close());
     $('#nav-next').addEventListener('click', goNext);
     $('#nav-prev').addEventListener('click', goPrev);
@@ -2154,8 +2187,10 @@ NC.reader = (() => {
       /* Garde : les pastilles ne doivent jamais lever si le contrôleur
          courant ne sait pas souligner. */
       if (!ctl || typeof ctl.addHighlight !== 'function') return;
-      const used = await ctl.addHighlight(key);
-      if (used) { lastHighlightColor = used; updateHighlightSwatch(); }
+      try {
+        const used = await ctl.addHighlight(key);
+        if (used) { lastHighlightColor = used; updateHighlightSwatch(); }
+      } catch (error) { NC.toast('Le soulignement n’a pas pu être enregistré.', 'error'); }
     };
     const colRow = $('#sel-colors');
     if (colRow) {

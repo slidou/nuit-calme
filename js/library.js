@@ -34,6 +34,12 @@ NC.library = (() => {
      « Dernière lecture / récent d'abord » (l'ordre historique) si la
      donnée est absente ou inconnue. */
   let query = '';
+  let foldedQuery = '';
+  const searchKeys = new WeakMap();
+  const titleCollator = new Intl.Collator('fr', { sensitivity: 'base', numeric: true });
+  let renderTimer;
+  let renderedBooks = [];
+  let renderedMeta = [];
   let sortState = NC.libSortLoad();
   let dragDepth = 0;        // profondeur du glisser-déposer en cours (overlay)
   let cardPopBook = null;   // livre affiché par le menu de rangement ouvert
@@ -57,13 +63,15 @@ NC.library = (() => {
      aucun toast par livre, la grille se remplit au fil des succès,
      et un récapitulatif final dit ce qui a échoué — et pourquoi. */
   const BOOK_EXT_RE = /\.(epub|pdf)$/i;
+  const validatedFiles = new WeakSet();
 
   async function importFiles(fileList) {
     const files = Array.from(fileList || []).filter(Boolean);
     if (!files.length) return;
     const batch = files.length > 1;
     const prog = batch ? NC.toastHold('Import en masse…') : null;
-    const added = [];
+    let added = 0;
+    let paintedAt = performance.now();
     const fails = [];
 
     for (let i = 0; i < files.length; i++) {
@@ -87,14 +95,21 @@ NC.library = (() => {
         else NC.toast(failMessage(file, err), 'error');
       }
       if (!rec) continue;
-      added.push(rec);
+      added++;
       /* En masse, la bibliothèque vit au fil de l'eau : chaque succès
          apparaît aussitôt (étiquette « À lire », compteurs suivis). */
-      if (batch) { books.unshift(rec); renderFilters(); render(); }
+      if (batch) {
+        const { data, ...metadata } = rec;
+        books.unshift(metadata);
+        if (performance.now() - paintedAt >= 150) {
+          paintedAt = performance.now();
+          renderFilters(); render();
+        }
+      }
     }
 
     if (batch) {
-      const n = added.length, k = fails.length;
+      const n = added, k = fails.length;
       const liste = `${fails.slice(0, 3).join(' ; ')}${k > 3 ? '…' : ''}`;
       if (!k) prog.done(`Import en masse terminé — ${n} ${n > 1 ? 'livres ajoutés' : 'livre ajouté'}.`, 'success');
       else if (!n) prog.done(`Aucun livre ajouté — ${k} échec${k > 1 ? 's' : ''} : ${liste}`, 'error', 8000);
@@ -109,12 +124,14 @@ NC.library = (() => {
     if ((err && err.name === 'QuotaExceededError') || /quota/i.test(m)) return 'stockage saturé';
     if (/password|encrypt|drm/i.test(m)) return 'protégé (DRM ou mot de passe)';
     if (/délai/i.test(m)) return 'délai dépassé';
+    if (/volume hors limites/i.test(m)) return 'fichier trop volumineux';
     return 'fichier illisible';
   }
 
   /* Message complet d'un échec à l'unité (import d'un seul fichier).
      Reprise mot pour mot des messages d'avant la V2.15. */
   function failMessage(file, err) {
+    if (/volume hors limites/i.test(err?.message)) return `« ${file.name} » dépasse la limite de taille d’import.`;
     return (err && (err.name === 'QuotaExceededError' || /quota/i.test(String(err && err.message))))
       ? `Stockage du navigateur saturé — « ${file.name} » n'a pas pu être enregistré. Supprimez des livres ou libérez de l'espace.`
       : `« ${file.name} » n'a pas pu être ouvert${/encrypt|password|drm/i.test(String(err && err.message)) ? ' — EPUB protégé (DRM) non pris en charge' : ''}.`;
@@ -181,13 +198,23 @@ NC.library = (() => {
     return null;
   }
 
+  async function readBookFile(file, type) {
+    if (file.size > NC.archive.maxBook) throw new Error('Volume hors limites');
+    const buffer = await file.arrayBuffer();
+    if (!validatedFiles.has(file)) {
+      await NC.archive.validateBook(type, buffer);
+      validatedFiles.add(file);
+    }
+    return buffer;
+  }
+
   /* Titre, auteur, couverture d'un fichier épars (packs) : le même
      travail que l'import, sans toucher à la bibliothèque. Jette si
      le fichier est illisible — l'appelant fait le récit. */
   async function peepFile(file) {
     const type = fileTypeOf(file);
     if (!type) throw new Error('format non pris en charge');
-    const buf = await file.arrayBuffer();
+    const buf = await readBookFile(file, type);
     const meta = type === 'epub' ? await peepEpub(buf) : await peepPdf(buf);
     return Object.assign(meta, { type });
   }
@@ -205,7 +232,7 @@ NC.library = (() => {
   async function importEpub(file, opts, pre) {
     const quiet = opts && opts.quiet; // en masse : la pastille de progression fait le récit
     if (!quiet) NC.toast(`Import de « ${file.name} »…`);
-    const buf = await file.arrayBuffer();
+    const buf = await readBookFile(file, 'epub');
     const meta = pre || await peepEpub(buf);
     const rec = makeRecord({
       title: meta.title || file.name.replace(/\.epub$/i, ''),
@@ -221,7 +248,7 @@ NC.library = (() => {
   async function importPdf(file, opts, pre) {
     const quiet = opts && opts.quiet; // en masse : la pastille de progression fait le récit
     if (!quiet) NC.toast(`Import de « ${file.name} »…`);
-    const buf = await file.arrayBuffer();
+    const buf = await readBookFile(file, 'pdf');
     let meta;
     if (pre) meta = pre;
     else {
@@ -313,54 +340,23 @@ NC.library = (() => {
   const sortGroups = () => groups.sort((a, b) =>
     ((a.order || 0) - (b.order || 0)) || String(a.name).localeCompare(String(b.name), 'fr'));
 
-  /* Charge les rayons et les fiches ; répare au passage un filtre
-     mémorisé qui viserait un groupe supprimé ailleurs. */
-  async function loadShelf() {
-    try { groups = (await NC.db.allGroups()) || []; } catch (e) { groups = []; }
-    sortGroups();
+  async function applyRange(bookId, patch) {
     try {
-      const rows = (await NC.db.allBookMeta()) || [];
-      metas = new Map(rows.map((m) => [m.id, m]));
-    } catch (e) { metas = new Map(); }
-    if (filter.group !== 'all' && filter.group !== 'none' && !groupOf(filter.group)) {
-      filter.group = 'all';
-      NC.libFilterSave(filter);
-    }
-  }
-
-  /* Lecture-ajout de la fiche : jamais d'écrasement d'un champ par un
-     autre (statut et groupe vivent sur le même enregistrement). */
-  async function mergeMeta(bookId, patch) {
-    const next = Object.assign({ id: bookId }, metaOf(bookId), patch, { updatedAt: Date.now() });
-    metas.set(bookId, next);
-    try { await NC.db.putBookMeta(next); } catch (e) { console.error('fiche livre', e); }
-    return next;
-  }
-
-  /* Change de statut ou de groupe depuis le menu : la fiche est
-     fusionnée en base, la grille et les compteurs suivent, et le
-     menu ouvert se reconstruit (la coche passe de ligne). */
-  function applyRange(bookId, patch) {
-    return mergeMeta(bookId, patch).then((m) => {
+      const row = await NC.db.changeBookMeta(bookId, patch);
+      if (!row) throw new Error('Livre introuvable');
+      metas.set(bookId, row);
       renderFilters();
       render();
       if (cardPopBook === bookId) buildCardPop();
-      if (NC.goal) NC.goal.refresh(); // le compte de l'objectif suit (V2.24)
-      return m;
-    });
+      if (NC.goal) NC.goal.refresh();
+      return row;
+    } catch (error) {
+      NC.toast('La fiche n’a pas pu être enregistrée.', 'error');
+      return null;
+    }
   }
-  /* Le passage à « Terminé » DATE la fiche (statusAt) : l'objectif de
-     lecture (V2.24) ne compte que les livres finis pendant sa période.
-     Revenir en arrière efface la date — refaire « Terminé » la repose
-     au jour du geste. Les autres changements de statut n'y touchent pas. */
-  function setBookStatus(bookId, status) {
-    const next = NC.normStatus(status);
-    const prev = NC.normStatus(metaOf(bookId).status);
-    const patch = { status: next };
-    if (next === 'termine' && prev !== 'termine') patch.statusAt = Date.now();
-    else if (next !== 'termine' && prev === 'termine') patch.statusAt = null;
-    return applyRange(bookId, patch);
-  }
+
+  const setBookStatus = (bookId, status) => applyRange(bookId, { status: NC.normStatus(status) });
   const assignGroup = (bookId, groupId) => applyRange(bookId, { groupId: groupId || null });
 
   /* ── Grille ──
@@ -369,21 +365,26 @@ NC.library = (() => {
      ouverture) ; rec.lastOpened reste le repli historique. Le tri affiché
      est celui choisi (visibleBooks) ; celui-ci, conservé, sert d'ordre
      de base et de départage pour les clés à égalité. */
+  let refreshGeneration = 0;
   async function refresh() {
-    books = await NC.db.allBooks();
-    let prog = [];
-    try { prog = await NC.db.allProgress(); } catch (e) { /* base ancienne */ }
-    const opened = new Map(prog.map((p) => [p.id, p.lastOpened || 0]));
-    for (const b of books) {
-      const po = opened.get(b.id) || 0;
-      if (po > (b.lastOpened || 0)) b.lastOpened = po;
+    const generation = ++refreshGeneration;
+    const snapshot = await NC.db.catalogSnapshot();
+    if (generation !== refreshGeneration) return;
+    books = snapshot.books;
+    groups = snapshot.groups;
+    sortGroups();
+    metas = new Map(snapshot.bookmeta.map((m) => [m.id, m]));
+    if (filter.group !== 'all' && filter.group !== 'none' && !groupOf(filter.group)) {
+      filter.group = 'all';
+      NC.libFilterSave(filter);
     }
+    const opened = new Map(snapshot.progress.map((p) => [p.id, p.lastOpened || 0]));
+    for (const b of books) b.lastOpened = Math.max(b.lastOpened || 0, opened.get(b.id) || 0);
     books.sort((a, b) => (b.lastOpened || b.addedAt) - (a.lastOpened || a.addedAt));
-    await loadShelf();
     renderFilters();
     render();
-    if (NC.goal) NC.goal.refresh(); // bannière objectif à jour (V2.24)
-    if (NC.backup) NC.backup.refreshNotice(); // rappel de sauvegarde à jour (V2.25)
+    if (NC.goal) NC.goal.refresh();
+    if (NC.backup) NC.backup.refreshNotice();
   }
 
   /* ── Objectif de lecture (V2.24) : les « Terminé », datés ──
@@ -406,9 +407,9 @@ NC.library = (() => {
   /* La recherche compare le texte PLIÉ (NC.foldText : casse et accents
      ignorés — « écla » trouve « Éclats ») au titre ET à l'auteur. */
   const matchesQuery = (b) => {
-    if (!query) return true;
-    const q = NC.foldText(query);
-    return NC.foldText(b.title).includes(q) || NC.foldText(b.author).includes(q);
+    if (!foldedQuery) return true;
+    if (!searchKeys.has(b)) searchKeys.set(b, [NC.foldText(b.title), NC.foldText(b.author)]);
+    return searchKeys.get(b).some((text) => text.includes(foldedQuery));
   };
 
   /* Comparateur du tri courant. « Dernière lecture » retombe sur la
@@ -418,8 +419,7 @@ NC.library = (() => {
      un livre sans auteur passe après les autres en ordre croissant. */
   function compareBooks(a, b) {
     const dir = sortState.dir === 'asc' ? 1 : -1;
-    const alpha = (va, vb) => String(va || '')
-      .localeCompare(String(vb || ''), 'fr', { sensitivity: 'base', numeric: true });
+    const alpha = (va, vb) => titleCollator.compare(String(va || ''), String(vb || ''));
     switch (sortState.by) {
       case 'title':
         return dir * alpha(a.title, b.title);
@@ -455,24 +455,22 @@ NC.library = (() => {
      la cliquant, l'autre dimension restant telle quelle — la recherche
      comprise (elle affine tout le monde). */
   function facetCounts() {
-    const q = (b) => matchesQuery(b);
-    const inGroup = (b) => {
-      const m = metaOf(b.id);
-      if (filter.group === 'all') return true;
-      if (filter.group === 'none') return !m.groupId;
-      return m.groupId === filter.group;
-    };
-    const st = { all: books.filter((b) => inGroup(b) && q(b)).length };
-    for (const k of Object.keys(NC.READ_STATUS)) {
-      st[k] = books.filter((b) => inGroup(b) && q(b) && NC.normStatus(metaOf(b.id).status) === k).length;
-    }
-    const inStatus = (b) => filter.status === 'all' || NC.normStatus(metaOf(b.id).status) === filter.status;
-    const gr = {
-      all: books.filter((b) => inStatus(b) && q(b)).length,
-      none: books.filter((b) => inStatus(b) && q(b) && !metaOf(b.id).groupId).length,
-    };
-    for (const g of groups) {
-      gr[g.id] = books.filter((b) => inStatus(b) && q(b) && metaOf(b.id).groupId === g.id).length;
+    const st = { all: 0, ...Object.fromEntries(Object.keys(NC.READ_STATUS).map((key) => [key, 0])) };
+    const gr = Object.assign(Object.create(null), { all: 0, none: 0 });
+    for (const g of groups) gr[g.id] = 0;
+    for (const book of books) {
+      if (!matchesQuery(book)) continue;
+      const meta = metaOf(book.id);
+      const status = NC.normStatus(meta.status);
+      const group = meta.groupId || 'none';
+      if (filter.group === 'all' || filter.group === group) {
+        st.all++;
+        st[status]++;
+      }
+      if (filter.status === 'all' || filter.status === status) {
+        gr.all++;
+        if (Object.hasOwn(gr, group) && group !== 'all') gr[group]++;
+      }
     }
     return { st, gr };
   }
@@ -511,6 +509,7 @@ NC.library = (() => {
     filter = { status: 'all', group: 'all' };
     NC.libFilterSave(filter);
     query = '';
+    foldedQuery = '';
     const si = NC.$('#lib-search');
     if (si) si.value = '';
     renderFilters(); render();
@@ -540,11 +539,11 @@ NC.library = (() => {
   }
 
   function render() {
+    clearTimeout(renderTimer);
     const grid = NC.$('#book-grid');
     const empty = NC.$('#empty-state');
     const count = NC.$('#lib-count');
     const vis = visibleBooks();
-    grid.innerHTML = '';
     const total = books.length;
     const narrowed = filter.status !== 'all' || filter.group !== 'all' || !!query;
     count.textContent = narrowed
@@ -566,7 +565,26 @@ NC.library = (() => {
       }
     }
 
-    for (const book of vis) {
+    const currentMeta = vis.map((book) => metas.get(book.id));
+    if (renderedBooks.length === vis.length && grid.childElementCount === vis.length &&
+        vis.every((book, index) => book === renderedBooks[index] && currentMeta[index] === renderedMeta[index])) return;
+    renderedBooks = vis;
+    renderedMeta = currentMeta;
+    grid.replaceChildren();
+    let offset = 0;
+    function appendBatch() {
+      const fragment = document.createDocumentFragment();
+      const start = offset;
+      const deadline = performance.now() + 8;
+      while (offset < vis.length && (offset < start + 60 || performance.now() < deadline)) {
+        fragment.appendChild(createCard(vis[offset++]));
+      }
+      grid.appendChild(fragment);
+      if (offset < vis.length) renderTimer = setTimeout(appendBatch, 0);
+    }
+    appendBatch();
+
+    function createCard(book) {
       const card = document.createElement('article');
       card.className = 'card' + (statusOf(book.id) === 'termine' ? ' is-done' : '');
       card.tabIndex = 0;
@@ -577,6 +595,8 @@ NC.library = (() => {
       cover.className = 'card-cover';
       if (book.cover) {
         const img = document.createElement('img');
+        img.loading = 'lazy';
+        img.decoding = 'async';
         img.src = book.cover;
         img.alt = `Couverture de ${book.title}`;
         cover.appendChild(img);
@@ -684,7 +704,7 @@ NC.library = (() => {
         e.preventDefault();
         NC.reader.open(book.id);
       });
-      grid.appendChild(card);
+      return card;
     }
   }
 
@@ -822,21 +842,24 @@ NC.library = (() => {
     if (!name) { input.focus(); return; }
     const dup = groups.find((g) => g.name.toLowerCase() === name.toLowerCase() && g.id !== mode.groupId);
     if (dup) { NC.toast(`Un groupe porte déjà ce nom.`, 'error', 2200); input.focus(); input.select(); return; }
-    if (mode.mode === 'rename') {
-      const g = groupOf(mode.groupId);
-      if (g) {
-        g.name = name;
-        await NC.db.putGroup(g).catch((e) => console.error(e));
-        sortGroups();
+    try {
+      if (mode.mode === 'rename') {
+        const saved = await NC.db.renameGroup(mode.groupId, name);
+        if (!saved) throw new Error('Groupe introuvable');
+        groups = groups.map((group) => group.id === saved.id ? saved : group);
+        renderedBooks = [];
         NC.toast(`Groupe renommé en « ${name} ».`);
+      } else {
+        const g = { id: crypto.randomUUID(), name, order: nextOrder(), createdAt: Date.now() };
+        await NC.db.putGroup(g);
+        groups.push(g);
+        if (mode.assignBookId) await assignGroup(mode.assignBookId, g.id);
+        NC.toast(`Groupe « ${name} » créé.`, 'success');
       }
-    } else {
-      const g = { id: crypto.randomUUID(), name, order: nextOrder(), createdAt: Date.now() };
-      groups.push(g);
       sortGroups();
-      await NC.db.putGroup(g).catch((e) => console.error(e));
-      if (mode.assignBookId) await assignGroup(mode.assignBookId, g.id);
-      NC.toast(`Groupe « ${name} » créé.`, 'success');
+    } catch (error) {
+      NC.toast('Le groupe n’a pas pu être enregistré.', 'error');
+      return;
     }
     renderFilters();
     render();
@@ -900,7 +923,10 @@ NC.library = (() => {
     }
     try {
       await NC.db.deleteGroup(g.id);
-    } catch (e) { console.error(e); }
+    } catch (error) {
+      NC.toast('Le groupe n’a pas pu être supprimé.', 'error');
+      return;
+    }
     groups = groups.filter((x) => x.id !== g.id);
     for (const [id, m] of Array.from(metas)) {
       if (m.groupId === g.id) metas.set(id, Object.assign({}, m, { groupId: null, updatedAt: Date.now() }));
@@ -1038,7 +1064,9 @@ NC.library = (() => {
     const prev = btn.textContent;
     btn.textContent = 'Extraction…';
     try {
-      const data = await extractOriginalCover(book);
+      const stored = await NC.db.getBook(book.id);
+      if (!stored) throw new Error('Livre introuvable');
+      const data = await extractOriginalCover(stored);
       if (seq !== editExtractSeq || !editBookId) return; // modale fermée entre-temps
       if (!data) {
         NC.toast('Aucune jaquette trouvée dans le fichier du livre.', 'error');
@@ -1062,12 +1090,14 @@ NC.library = (() => {
     const author = String(NC.$('#edit-author').value || '')
       .replace(/\s+/g, ' ').trim().slice(0, 120);
     const oldTitle = book.title;
-    book.title = title;
-    book.author = author;
-    if (editCoverState === 'set') book.cover = editCoverData;
-    else if (editCoverState === 'removed') book.cover = null;
+    const patch = { title, author };
+    if (editCoverState === 'set') patch.cover = editCoverData;
+    else if (editCoverState === 'removed') patch.cover = null;
     try {
-      await NC.db.putBook(book);
+      const saved = await NC.db.patchBook(book.id, patch);
+      if (!saved) throw new Error('Livre introuvable');
+      const { data, ...metadata } = saved;
+      books = books.map((row) => row.id === book.id ? { ...metadata, lastOpened: row.lastOpened } : row);
     } catch (e) {
       console.error('Fiche livre', e);
       NC.toast('La fiche n\u2019a pas pu être enregistrée (stockage saturé ?).', 'error');
@@ -1184,6 +1214,7 @@ NC.library = (() => {
       clearTimeout(deb);
       deb = setTimeout(() => {
         query = search.value.trim();
+        foldedQuery = NC.foldText(query);
         renderFilters(); render();
       }, 140);
     });
@@ -1192,6 +1223,7 @@ NC.library = (() => {
       e.stopPropagation(); // Échap vide la recherche sans toucher aux popovers
       search.value = '';
       query = '';
+      foldedQuery = '';
       renderFilters(); render();
       search.blur();
     });
@@ -1210,6 +1242,18 @@ NC.library = (() => {
 
   /* ── Initialisation ── */
   function init() {
+    let needsRefresh = false;
+    let refreshTimer;
+    function refreshFromOtherTab() {
+      if (!needsRefresh || document.hidden || NC.$('#view-library').hidden) return;
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        needsRefresh = false;
+        refresh().catch((error) => console.warn('Actualisation de la bibliothèque', error));
+      }, 150);
+    }
+    NC.db.onCatalogChange(() => { needsRefresh = true; refreshFromOtherTab(); });
+    document.addEventListener('visibilitychange', refreshFromOtherTab);
     NC.$('#btn-add').addEventListener('click', () => NC.$('#file-input').click());
     const input = NC.$('#file-input');
     input.addEventListener('change', () => { importFiles(input.files); input.value = ''; });

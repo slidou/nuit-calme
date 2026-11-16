@@ -27,8 +27,7 @@
       const name = decodeURIComponent(fileUrl.split('/').pop());
       const file = new File([blob], name, { type: blob.type });
       await NC.library.importFiles([file]);
-      const books = await NC.db.allBooks();
-      return books.length;
+      return NC.db.countBooks();
     },
     state() {
       const st = NC.reader._state();
@@ -64,7 +63,21 @@
       (location.protocol === 'https:' ||
        location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
+      navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((registration) => {
+        let announced = false;
+        function announceUpdate() {
+          if (announced || !navigator.serviceWorker.controller) return;
+          announced = true;
+          NC.toast('Une mise à jour est prête. Elle s’appliquera à la prochaine ouverture après avoir fermé les onglets de Nuit Calme.', 'info', 8500);
+        }
+        if (registration.waiting) announceUpdate();
+        registration.addEventListener('updatefound', () => {
+          const worker = registration.installing;
+          worker?.addEventListener('statechange', () => {
+            if (worker.state === 'installed') announceUpdate();
+          });
+        });
+      }).catch((error) => console.warn('Service worker Nuit Calme', error));
     });
   }
 

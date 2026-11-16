@@ -15,7 +15,8 @@ NC.openPdf = async function (rec, opts) {
   });
   /* Surlignages (n°5) : cache des annotations du livre, chargé une
      fois par ouverture — même magasin « annotations » que l'EPUB. */
-  const annCache = await NC.db.annotationsFor(rec.id).catch(() => []);
+  let annCache = await NC.db.annotationsFor(rec.id).catch(() => []);
+  let destroyed = false;
 
   const ctl = {
     type: 'pdf',
@@ -42,6 +43,7 @@ NC.openPdf = async function (rec, opts) {
 
   const isDouble = () => ctl.spread === 'always';
   const pageStep = () => (isDouble() ? 2 : 1);
+  const writeProgress = NC.progressWriter(rec.id);
 
   /* ── Couche texte (n°4) ──
      Un calque de spans transparents est superposé à chaque canvas : la
@@ -196,14 +198,7 @@ NC.openPdf = async function (rec, opts) {
        réécrire le livre ENTIER à chaque tourne-page coûtait jusqu'à ~0,6 s
        sur un gros PDF (fichier de 80 Mo mesuré) et martelait le stockage
        du navigateur. Désormais : quelques octets par page. */
-    NC.db.putProgress({
-      id: rec.id,
-      lastPage: ctl.page,
-      zoom: ctl.zoom,
-      fit: ctl.fit,
-      pct: ctl.percent(),
-      lastOpened: Date.now(),
-    }).catch(() => {});
+    ctl.saveProgress();
     if (ctl._onRelocated) ctl._onRelocated({ page: ctl.page, end, numPages: doc.numPages });
   }
 
@@ -602,8 +597,8 @@ NC.openPdf = async function (rec, opts) {
       rects: part.rects,
       createdAt: Date.now(),
     }));
+    await NC.db.putAnnotations(rec.id, created);
     annCache.push(...created);
-    try { await Promise.all(created.map((a) => NC.db.putAnnotation(a))); } catch (e) { console.error(e); }
     NC.db.putSetting('lastHighlightColor', color).catch(() => {});
     stage.querySelectorAll('.nc-pdf-page').forEach((wrap) => {
       if (created.some((a) => a.page === Number(wrap.dataset.page || 0))) {
@@ -619,6 +614,7 @@ NC.openPdf = async function (rec, opts) {
   };
 
   ctl.removeHighlight = async (ann) => {
+    await NC.db.deleteAnnotation(ann.id, rec.id);
     const i = annCache.findIndex((a) => a.id === ann.id);
     if (i >= 0) annCache.splice(i, 1);
     stage.querySelectorAll('.nc-pdf-page').forEach((wrap) => {
@@ -627,7 +623,6 @@ NC.openPdf = async function (rec, opts) {
       if (!svg) return;
       svg.querySelectorAll('g[data-nc-ann="' + CSS.escape(ann.id) + '"]').forEach((g) => g.remove());
     });
-    await NC.db.deleteAnnotation(ann.id);
   };
 
   /* Recolore un surlignage existant (tiroir) : cache, base et <g> SVG
@@ -635,8 +630,9 @@ NC.openPdf = async function (rec, opts) {
   ctl.recolorHighlight = async (ann, colorKey) => {
     const key = NC.highlightKey(colorKey);
     const target = annCache.find((a) => a.id === ann.id);
-    if (target) target.color = key;
-    try { await NC.db.putAnnotation(Object.assign({}, ann, { color: key })); } catch (e) { console.error(e); }
+    const row = await NC.db.patchAnnotation(ann.id, { color: key }, rec.id);
+    if (!row) throw new Error('Annotation supprimée');
+    if (target) Object.assign(target, row);
     const hex = NC.highlightHex(key);
     stage.querySelectorAll('.nc-pdf-page').forEach((wrap) => {
       if (Number(wrap.dataset.page || 0) !== ann.page) return;
@@ -652,12 +648,20 @@ NC.openPdf = async function (rec, opts) {
   ctl.setAnnotationCategory = async (ann, key) => {
     const val = NC.categoryMeta(key) ? key : '';
     const target = annCache.find((a) => a.id === ann.id);
-    if (target) target.category = val;
-    try { await NC.db.putAnnotation(Object.assign({}, ann, { category: val })); } catch (e) { console.error(e); }
+    const row = await NC.db.patchAnnotation(ann.id, { category: val }, rec.id);
+    if (!row) throw new Error('Annotation supprimée');
+    if (target) Object.assign(target, row);
     return val;
   };
 
   ctl.gotoAnnotation = (ann) => (ann && ann.page) ? ctl.gotoPage(ann.page) : Promise.resolve();
+  ctl.restoreHighlights = async () => {
+    annCache = await NC.db.annotationsFor(rec.id);
+    if (destroyed) return annCache;
+    stage.querySelectorAll('.nc-pdf-page').forEach((wrap) =>
+      drawAnnotationsFor(Number(wrap.dataset.page), wrap));
+    return annCache;
+  };
 
   /* ── Navigation ── */
   ctl.next = async () => {
@@ -770,13 +774,11 @@ NC.openPdf = async function (rec, opts) {
     ctl.page = Math.max(1, Math.min(doc.numPages, Math.round(p * (doc.numPages - 1)) + 1));
     await render();
   };
-  ctl.saveProgress = () => NC.db.putProgress({
-    id: rec.id,
+  ctl.saveProgress = () => writeProgress({
     lastPage: ctl.page,
     zoom: ctl.zoom,
     fit: ctl.fit,
     pct: ctl.percent(),
-    lastOpened: Date.now(),
   });
   ctl.chapterLabel = () => '';
 
@@ -828,11 +830,12 @@ NC.openPdf = async function (rec, opts) {
   };
 
   /* ── Recherche texte ── */
-  ctl.search = async function (query, onProgress) {
+  ctl.search = async function (query, onProgress, signal) {
     const q = query.trim().toLowerCase();
     if (!q) return [];
     const results = [];
     for (let p = 1; p <= doc.numPages; p++) {
+      if (destroyed || signal?.aborted) break;
       let text = '';
       try {
         const page = await doc.getPage(p);
@@ -840,6 +843,7 @@ NC.openPdf = async function (rec, opts) {
         text = tc.items.map((it) => it.str).join(' ').replace(/\s+/g, ' ');
         page.cleanup();
       } catch (e) { continue; }
+      if (destroyed || signal?.aborted) break;
       const hay = text.toLowerCase();
       let idx = hay.indexOf(q);
       let count = 0;
@@ -910,6 +914,7 @@ NC.openPdf = async function (rec, opts) {
   ctl.resize = () => { keepScroll(); return render(); };
 
   ctl.destroy = () => {
+    destroyed = true;
     renderGen++; // invalide tout rendu encore en vol
     ctl._tasks.forEach((t) => { try { t.cancel(); } catch (e) {} });
     ctl._tlTasks.forEach((t) => { try { t.cancel(); } catch (e) {} });

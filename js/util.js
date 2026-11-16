@@ -222,6 +222,135 @@ NC.downloadBlob = function (blob, filename) {
 
 NC.tick = () => new Promise((r) => setTimeout(r, 0));
 
+NC.archive = (() => {
+  const MiB = 1024 * 1024;
+  const maxBook = 256 * MiB;
+  const maxArchive = 768 * MiB;
+  const limits = {
+    epub: { file: maxBook, entry: 128 * MiB, total: 512 * MiB, count: 15000 },
+    pack: { file: maxArchive, entry: maxBook, total: maxArchive, count: 15000 },
+    backup: { file: Infinity, entry: maxBook, total: maxArchive, count: 30000 },
+  };
+  const tooLarge = () => new Error('Volume hors limites');
+  const crcTable = Uint32Array.from({ length: 256 }, (_, value) => {
+    for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ ((value & 1) ? 0xedb88320 : 0);
+    return value;
+  });
+
+  async function load(input, kind) {
+    const limit = limits[kind];
+    const sizeOnDisk = input.size ?? input.byteLength;
+    if (sizeOnDisk > limit.file) throw tooLarge();
+    // Les livres des sauvegardes officielles sont stockés sans recompression.
+    const maxExpanded = kind === 'backup' ? Math.max(limit.total, sizeOnDisk + 256 * MiB) : limit.total;
+    const zip = await JSZip.loadAsync(input);
+    const entries = Object.values(zip.files);
+    if (entries.length > limit.count) throw tooLarge();
+    let total = 0;
+    for (const entry of entries) {
+      if (entry.dir) continue;
+      if (entry.unsafeOriginalName !== entry.name || /[\\\u0000]/.test(entry.name)) {
+        throw new Error('Chemin invalide dans le ZIP');
+      }
+      // JSZip 3.10.1 conserve la taille de l’annuaire central ici.
+      const size = entry._data?.uncompressedSize;
+      if (!Number.isSafeInteger(size) || size < 0) throw new Error('Taille ZIP invalide');
+      total += size;
+      if (size > limit.entry || total > maxExpanded) throw tooLarge();
+    }
+    return zip;
+  }
+
+  function read(entry, limit) {
+    const { uncompressedSize: size, crc32 } = entry._data;
+    if (size > limit) return Promise.reject(tooLarge());
+    return new Promise((resolve, reject) => {
+      const data = new Uint8Array(size);
+      let offset = 0;
+      let crc = 0xffffffff;
+      let stream;
+      stream = entry.internalStream('uint8array')
+        .on('data', (chunk) => {
+          if (offset + chunk.length > size) {
+            stream.pause();
+            reject(new Error('Taille ZIP invalide'));
+            return;
+          }
+          for (let i = 0; i < chunk.length; i++) crc = (crc >>> 8) ^ crcTable[(crc ^ chunk[i]) & 0xff];
+          data.set(chunk, offset);
+          offset += chunk.length;
+        })
+        .on('error', reject)
+        .on('end', () => {
+          if (offset !== size || ((crc ^ 0xffffffff) | 0) !== (crc32 | 0)) {
+            reject(new Error('Intégrité ZIP invalide'));
+          } else resolve(data);
+        });
+      stream.resume();
+    });
+  }
+
+  async function validateBook(type, data) {
+    if (!data.byteLength || data.byteLength > maxBook) throw tooLarge();
+    if (type === 'pdf') {
+      const header = new TextDecoder().decode(new Uint8Array(data, 0, Math.min(1024, data.byteLength)));
+      if (!header.includes('%PDF-')) throw new Error('En-tête PDF invalide');
+    } else {
+      const zip = await load(data, 'epub');
+      const container = zip.file('META-INF/container.xml');
+      if (!container) throw new Error('Conteneur EPUB absent');
+      await read(container, MiB);
+    }
+  }
+
+  async function download(response, limit, progress) {
+    if (Number(response.headers.get('Content-Length')) > limit) throw tooLarge();
+    if (!response.body) {
+      const blob = await response.blob();
+      if (blob.size > limit) throw tooLarge();
+      return blob;
+    }
+    const reader = response.body.getReader();
+    const chunks = [];
+    let bytes = 0;
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > limit) {
+          await reader.cancel();
+          throw tooLarge();
+        }
+        chunks.push(value);
+        progress?.(bytes);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    return new Blob(chunks, { type: response.headers.get('Content-Type') || '' });
+  }
+
+  return { load, read, validateBook, download, maxBook, maxArchive };
+})();
+
+NC.progressWriter = function (id) {
+  let last;
+  return (position) => {
+    const key = JSON.stringify(position);
+    if (last?.key === key) return last.pending;
+    const pending = NC.db.putProgress({ id, ...position, lastOpened: Date.now() }).catch((error) => {
+      if (last?.pending === pending) {
+        last = null;
+        NC.toast('La position de lecture n’a pas pu être enregistrée.', 'error');
+      }
+      console.warn('Position de lecture', error);
+    });
+    last = { key, pending };
+    return pending;
+  };
+};
+
 /* ── Polices embarquées : CSS partagé, injecté aussi dans les EPUB ──
    Les URLs sont absolues (calculées depuis la page) : dans une iframe
    créée sur une URL blob:, les chemins relatifs ne se résolvent pas.

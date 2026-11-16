@@ -25,7 +25,7 @@ const NC_FOCUS_CSS = [
 
 NC.openEpub = async function (rec, opts) {
   const host = NC.$('#epub-host');
-  const book = ePub(rec.data.slice(0));
+  const book = ePub(rec.data);
 
   const ctl = {
     type: 'epub',
@@ -423,8 +423,7 @@ NC.openEpub = async function (rec, opts) {
        absorber les rafales de clics sur A− / A+ sans marteler la base. */
     clearTimeout(ctl._fsPrefsTimer);
     ctl._fsPrefsTimer = setTimeout(() => {
-      NC.db.getPrefs(rec.id)
-        .then((p) => NC.db.putPrefs(Object.assign(p || { id: rec.id }, { fontSize: ctl.fontSize, updatedAt: Date.now() })))
+      NC.db.patchPrefs(rec.id, { fontSize: ctl.fontSize })
         .catch(() => {});
     }, 400);
     if (ctl._rendition) {
@@ -462,17 +461,15 @@ NC.openEpub = async function (rec, opts) {
     await ctl._rendition.display(items[idx].href);
   };
 
+  const writeProgress = NC.progressWriter(rec.id);
   ctl.saveProgress = () => {
     const loc = ctl.location;
-    const entry = {
-      id: rec.id,
-      lastOpened: Date.now(),
+    if (!loc?.start?.cfi) return Promise.resolve();
+    return writeProgress({
       fontSize: ctl.fontSize,
-      lastCfi: '',
+      lastCfi: loc.start.cfi,
       pct: Math.round(ctl.percent() * 1000) / 1000,
-    };
-    if (loc && loc.start) entry.lastCfi = loc.start.cfi;
-    return NC.db.putProgress(entry);
+    });
   };
 
   /* Index des positions (pour la barre de progression) */
@@ -829,7 +826,7 @@ NC.openEpub = async function (rec, opts) {
     a.sectionIndex = view.index;
     a.start = off.start;
     a.end = off.end;
-    NC.db.putAnnotation(a).catch(() => {});
+    NC.db.patchAnnotation(a.id, { sectionIndex: a.sectionIndex, start: a.start, end: a.end }, rec.id).catch(() => {});
     return true;
   }
 
@@ -937,8 +934,8 @@ NC.openEpub = async function (rec, opts) {
       color: NC.highlightKey(colorKey),
       createdAt: Date.now(),
     };
+    await NC.db.putAnnotation(ann);
     annCache.push(ann);
-    try { await NC.db.putAnnotation(ann); } catch (e) { console.error(e); }
     NC.db.putSetting('lastHighlightColor', ann.color).catch(() => {});
     redrawSection(ann.sectionIndex);
     ctl.hideSelPopup();
@@ -970,8 +967,8 @@ NC.openEpub = async function (rec, opts) {
       note: String(noteText || '').slice(0, 4000),
       createdAt: Date.now(),
     };
+    await NC.db.putAnnotation(ann);
     annCache.push(ann);
-    try { await NC.db.putAnnotation(ann); } catch (e) { console.error(e); }
     redrawSection(ann.sectionIndex);
     return ann;
   };
@@ -981,8 +978,9 @@ NC.openEpub = async function (rec, opts) {
   ctl.updateNote = async (ann, noteText) => {
     const val = String(noteText || '').slice(0, 4000);
     const target = annCache.find((a) => a.id === ann.id);
-    if (target) { target.note = val; target.updatedAt = Date.now(); }
-    try { await NC.db.putAnnotation(Object.assign({}, ann, { note: val, updatedAt: Date.now() })); } catch (e) { console.error(e); }
+    const row = await NC.db.patchAnnotation(ann.id, { note: val, updatedAt: Date.now() }, rec.id);
+    if (!row) throw new Error('Annotation supprimée');
+    if (target) Object.assign(target, row);
     return true;
   };
 
@@ -992,8 +990,9 @@ NC.openEpub = async function (rec, opts) {
   ctl.recolorHighlight = async (ann, colorKey) => {
     const key = NC.highlightKey(colorKey);
     const target = annCache.find((a) => a.id === ann.id);
-    if (target) target.color = key;
-    try { await NC.db.putAnnotation(Object.assign({}, ann, { color: key })); } catch (e) { console.error(e); }
+    const row = await NC.db.patchAnnotation(ann.id, { color: key }, rec.id);
+    if (!row) throw new Error('Annotation supprimée');
+    if (target) Object.assign(target, row);
     const hex = NC.highlightHex(key);
     const views = [];
     try { ctl._rendition.views().forEach((v) => views.push(v)); } catch (e) {}
@@ -1013,12 +1012,14 @@ NC.openEpub = async function (rec, opts) {
   ctl.setAnnotationCategory = async (ann, key) => {
     const val = NC.categoryMeta(key) ? key : '';
     const target = annCache.find((a) => a.id === ann.id);
-    if (target) target.category = val;
-    try { await NC.db.putAnnotation(Object.assign({}, ann, { category: val })); } catch (e) { console.error(e); }
+    const row = await NC.db.patchAnnotation(ann.id, { category: val }, rec.id);
+    if (!row) throw new Error('Annotation supprimée');
+    if (target) Object.assign(target, row);
     return val;
   };
 
   ctl.removeHighlight = async (ann) => {
+    await NC.db.deleteAnnotation(ann.id, rec.id);
     annCache = annCache.filter((a) => a.id !== ann.id);
     const views = [];
     try { ctl._rendition.views().forEach((v) => views.push(v)); } catch (e) {}
@@ -1027,7 +1028,6 @@ NC.openEpub = async function (rec, opts) {
       if (!svg) return;
       svg.querySelectorAll('g[data-nc-ann="' + CSS.escape(ann.id) + '"]').forEach((g) => g.remove());
     });
-    await NC.db.deleteAnnotation(ann.id);
   };
 
   ctl.restoreHighlights = async () => {
@@ -1099,7 +1099,7 @@ NC.openEpub = async function (rec, opts) {
   };
 
   /* ── Recherche plein texte ── */
-  ctl.search = async function (query, onProgress) {
+  ctl.search = async function (query, onProgress, signal) {
     const q = query.trim().toLowerCase();
     if (!q) return [];
     const results = [];
@@ -1112,6 +1112,7 @@ NC.openEpub = async function (rec, opts) {
     try { currentSection = ctl.location ? book.spine.get(ctl.location.start.cfi) : null; } catch (e) {}
 
     for (let i = 0; i < items.length; i++) {
+      if (ctl._destroyed || signal?.aborted) break;
       const item = items[i];
       let doc;
       try {
@@ -1119,6 +1120,7 @@ NC.openEpub = async function (rec, opts) {
         doc = item.document;
       } catch (e) { continue; }
       try {
+        if (ctl._destroyed || signal?.aborted) break;
         const root = doc.body || doc.documentElement;
         const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
         let node;

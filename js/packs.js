@@ -410,7 +410,7 @@ NC.packs = (() => {
           signal: abort.signal,
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        const blob = await res.blob();
+        const blob = await NC.archive.download(res, NC.archive.maxBook);
         const file = new File([blob], nom.split('/').pop(), { type: blob.type });
         const meta = await NC.library.peepFile(file);
         if (stale(seq, pack.id)) return;
@@ -437,25 +437,10 @@ NC.packs = (() => {
       const res = await fetch(pack.source, { cache: 'no-store', signal: abort.signal });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const total = Number(res.headers.get('Content-Length')) || pack.taille || 0;
-      let buf;
-      if (res.body && total) {
-        const reader = res.body.getReader();
-        const morceaux = [];
-        let got = 0;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          morceaux.push(value);
-          got += value.length;
-          load.progress(got / total);
-        }
-        buf = new Blob(morceaux);
-      } else {
-        buf = await res.blob();
-      }
+      const blob = await NC.archive.download(res, NC.archive.maxArchive, total ? (got) => load.progress(got / total) : null);
       if (stale(seq, pack.id)) return;
       load.label('Décompression…');
-      const zip = await JSZip.loadAsync(await buf.arrayBuffer());
+      const zip = await NC.archive.load(blob, 'pack');
       if (stale(seq, pack.id)) return;
       load.remove();
       const noms = Object.keys(zip.files).filter((n) =>
@@ -473,9 +458,9 @@ NC.packs = (() => {
       for (const nom of noms) {
         try {
           const base = nom.split('/').pop();
-          const blob = await zip.files[nom].async('blob');
+          const bytes = await NC.archive.read(zip.files[nom], NC.archive.maxBook);
           if (stale(seq, pack.id)) return;
-          const file = new File([blob], base, { type: /\.pdf$/i.test(nom) ? 'application/pdf' : 'application/epub+zip' });
+          const file = new File([bytes], base, { type: /\.pdf$/i.test(nom) ? 'application/pdf' : 'application/epub+zip' });
           const meta = await NC.library.peepFile(file);
           if (stale(seq, pack.id)) return;
           const st = session.entries.get(nom);

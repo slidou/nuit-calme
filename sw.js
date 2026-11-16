@@ -5,8 +5,7 @@
    le cache ; les livres, eux, reposent dans IndexedDB — la liseuse
    entière s'ouvre et se lit hors-ligne.
    Stratégies :
-   · navigations → réseau d'abord (les mises à jour arrivent d'une
-     simple recharge), cache en secours si le réseau manque ;
+   · navigations → page et ressources du même pré-cache ;
    · ressources de l'interface → pré-cache de la version active ;
    · packs, livres et autres ressources → le réseau
      décide, les importations finissent de toute façon en IndexedDB.
@@ -15,7 +14,7 @@
 
 const SCOPE = self.registration.scope;
 const CACHE_PREFIX = `nuit-calme:${SCOPE}:`;
-const CACHE = CACHE_PREFIX + 'v2.27-1';
+const CACHE = CACHE_PREFIX + 'v2.27-2';
 
 const PRECACHE = [
   './',
@@ -71,10 +70,10 @@ self.addEventListener('install', (event) => {
          ne peut plus s'installer (la mise à jour tenait parfois en
          deux ou trois recharges au lieu d'une seule). */
       .then((cache) => cache.addAll(PRECACHE.map((u) => new Request(new URL(u, SCOPE), { cache: 'reload' }))))
-      .then(() => self.skipWaiting())
   );
 });
 
+// Une nouvelle version attend que les pages de l’ancienne soient fermées.
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
@@ -93,10 +92,10 @@ self.addEventListener('fetch', (event) => {
   if (req.mode === 'navigate') {
     url.search = '';
     if (url.href === SCOPE || url.href === ENTRY) {
-      event.respondWith(fetch(req).catch(async () => {
+      event.respondWith((async () => {
         const cache = await caches.open(CACHE);
-        return await cache.match(ENTRY) || Response.error();
-      }));
+        return await cache.match(ENTRY) || fetch(req);
+      })());
     }
     return;
   }

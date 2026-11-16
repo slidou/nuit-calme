@@ -166,13 +166,11 @@ NC.backup = (() => {
      avant la confirmation du remplacement ; un fichier étranger est
      refusé ici plutôt qu'à mi-chemin. */
   async function peek(file) {
-    let zip;
-    try { zip = await JSZip.loadAsync(file); }
-    catch (e) { throw new Error('étranger'); } // pas une archive du tout
+    const zip = await NC.archive.load(file, 'backup');
     const mf = zip.file('manifest.json');
     const lib = zip.file('library.json');
     if (!mf || !lib) throw new Error('incomplet');
-    const manifest = JSON.parse(await mf.async('string'));
+    const manifest = JSON.parse(new TextDecoder().decode(await NC.archive.read(mf, 1024 * 1024)));
     if (!manifest || manifest.app !== APP) throw new Error('étranger');
     if (manifest.format !== FORMAT) throw new Error('version incompatible');
     return { manifest, zip };
@@ -197,7 +195,8 @@ NC.backup = (() => {
     const step = (message) => { if (onStep) onStep(message); };
     if (mode !== 'merge' && mode !== 'replace') throw new Error('Mode de restauration inconnu');
     const { manifest, zip } = await peek(file);
-    const data = JSON.parse(await zip.file('library.json').async('string'));
+    const data = JSON.parse(new TextDecoder().decode(
+      await NC.archive.read(zip.file('library.json'), 256 * 1024 * 1024)));
     if (!data || typeof data !== 'object') throw new Error('incomplet');
     validateRows(data.books, 'id');
     if (manifest.counts && manifest.counts.books !== undefined &&
@@ -215,10 +214,11 @@ NC.backup = (() => {
       const entry = zip.file(`books/${book.id}.${book.type}`);
       if (!entry) throw new Error('incomplet');
       step(`Vérification des fichiers — ${index + 1}/${data.books.length}…`);
-      const buffer = await entry.async('arraybuffer');
+      const { buffer } = await NC.archive.read(entry, NC.archive.maxBook);
       if (!buffer.byteLength || (book.size > 0 && book.size !== buffer.byteLength)) {
         throw new Error('incomplet');
       }
+      await NC.archive.validateBook(book.type, buffer);
       state.books.push({ ...book, data: buffer });
     }
 
@@ -329,13 +329,17 @@ NC.backup = (() => {
       refreshNotice();
     } catch (err) {
       console.error('Restauration échouée', err);
-      const msg = /étranger/.test(String(err && err.message))
+      const msg = err?.name === 'QuotaExceededError'
+        ? 'Espace de stockage insuffisant. La bibliothèque précédente est toujours disponible.'
+        : /étranger/.test(String(err && err.message))
         ? 'Ce fichier n\u2019est pas une sauvegarde Nuit Calme.'
         : /incomplet/.test(String(err && err.message))
           ? 'Cette sauvegarde est incomplète ou contient des données invalides.'
           : /version incompatible/.test(String(err && err.message))
             ? 'Cette version du format de sauvegarde est incompatible.'
-            : 'La restauration a échoué. Vérifiez le fichier et l’espace de stockage disponible.';
+            : /volume hors limites/i.test(String(err && err.message))
+              ? 'La sauvegarde dépasse les limites de taille de cette liseuse.'
+              : 'La restauration a échoué. Vérifiez le fichier et l’espace de stockage disponible.';
       prog.done(msg, 'error', 8000);
     } finally {
       busy = false;
