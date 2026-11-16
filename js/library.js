@@ -40,6 +40,7 @@ NC.library = (() => {
   let renderTimer;
   let renderedBooks = [];
   let renderedMeta = [];
+  let bookToFocus = null;
   let sortState = NC.libSortLoad();
   let dragDepth = 0;        // profondeur du glisser-déposer en cours (overlay)
   let cardPopBook = null;   // livre affiché par le menu de rangement ouvert
@@ -484,6 +485,7 @@ NC.library = (() => {
     lab.textContent = label;
     b.appendChild(lab);
     if (count != null) {
+      b.setAttribute('aria-pressed', String(active));
       const n = document.createElement('span');
       n.className = 'chip-n';
       n.textContent = String(count);
@@ -519,6 +521,9 @@ NC.library = (() => {
     const stRow = NC.$('#filter-status');
     const grRow = NC.$('#filter-groups');
     if (!stRow || !grRow) return;
+    const active = document.activeElement;
+    const activeRow = [stRow, grRow].find((row) => row.contains(active));
+    const activeLabel = activeRow && active.querySelector('.chip-label')?.textContent;
     const c = facetCounts();
     stRow.innerHTML = '';
     stRow.appendChild(chip('Tous', c.st.all, filter.status === 'all', () => setStatusFilter('all')));
@@ -535,6 +540,31 @@ NC.library = (() => {
       () => openGroupPop({ mode: 'create' }), 'ghost'));
     if (groups.length) {
       grRow.appendChild(chip('Gérer', null, false, () => openManage(), 'ghost manage'));
+    }
+    if (activeLabel) {
+      const match = [...activeRow.children].find((button) => button.querySelector('.chip-label')?.textContent === activeLabel);
+      NC.focus(match, activeRow.firstElementChild);
+    }
+  }
+
+  function focusListedBook() {
+    if (bookToFocus === null) return;
+    if (document.activeElement !== document.body && document.activeElement !== NC.$('#btn-back')) {
+      bookToFocus = null;
+      return;
+    }
+    const button = NC.$(`#book-grid [data-book-id="${CSS.escape(String(bookToFocus))}"] .card-open`);
+    if (!button) return;
+    bookToFocus = null;
+    button.focus();
+  }
+
+  function focusBook(id) {
+    bookToFocus = id;
+    focusListedBook();
+    if (bookToFocus !== null && !renderedBooks.some((book) => book.id === id)) {
+      bookToFocus = null;
+      NC.focus(NC.$('#lib-search'), NC.$('#btn-add'));
     }
   }
 
@@ -580,6 +610,7 @@ NC.library = (() => {
         fragment.appendChild(createCard(vis[offset++]));
       }
       grid.appendChild(fragment);
+      focusListedBook();
       if (offset < vis.length) renderTimer = setTimeout(appendBatch, 0);
     }
     appendBatch();
@@ -587,9 +618,7 @@ NC.library = (() => {
     function createCard(book) {
       const card = document.createElement('article');
       card.className = 'card' + (statusOf(book.id) === 'termine' ? ' is-done' : '');
-      card.tabIndex = 0;
-      card.setAttribute('role', 'button');
-      card.setAttribute('aria-label', `Lire ${book.title}`);
+      card.dataset.bookId = book.id;
 
       const cover = document.createElement('div');
       cover.className = 'card-cover';
@@ -598,7 +627,7 @@ NC.library = (() => {
         img.loading = 'lazy';
         img.decoding = 'async';
         img.src = book.cover;
-        img.alt = `Couverture de ${book.title}`;
+        img.alt = '';
         cover.appendChild(img);
       } else {
         const gen = document.createElement('div');
@@ -610,8 +639,10 @@ NC.library = (() => {
       badge.className = 'badge';
       badge.textContent = book.type.toUpperCase();
       cover.appendChild(badge);
-      const open = document.createElement('div');
+      const open = document.createElement('button');
+      open.type = 'button';
       open.className = 'card-open';
+      open.setAttribute('aria-label', `Lire ${book.title}`);
       open.textContent = 'Lire';
       cover.appendChild(open);
 
@@ -644,6 +675,8 @@ NC.library = (() => {
       menu.type = 'button';
       menu.title = 'Statut de lecture et groupe';
       menu.setAttribute('aria-label', `Ranger ${book.title}`);
+      menu.setAttribute('aria-controls', 'card-pop');
+      menu.setAttribute('aria-expanded', String(cardPopBook === book.id));
       menu.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="12" cy="5.4" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="18.6" r="1.5"/></svg>';
       menu.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -695,15 +728,6 @@ NC.library = (() => {
 
       card.append(cover, del, menu, edit, meta);
       card.addEventListener('click', () => NC.reader.open(book.id));
-      card.addEventListener('keydown', (e) => {
-        if (e.key !== 'Enter' && e.key !== ' ') return;
-        // Les boutons Supprimer et Ranger sont des enfants de la carte :
-        // si le focus est sur l'un d'eux, Entrée/Espace ne doivent PAS
-        // aussi ouvrir le livre.
-        if (e.target && e.target.closest && e.target.closest('button')) return;
-        e.preventDefault();
-        NC.reader.open(book.id);
-      });
       return card;
     }
   }
@@ -726,14 +750,10 @@ NC.library = (() => {
     const pop = NC.$('#card-pop');
     buildCardPop();
     pop.hidden = false;
-    const r = btn.getBoundingClientRect();
-    const pw = pop.offsetWidth, ph = pop.offsetHeight;
-    let x = Math.min(Math.max(8, r.right - pw), window.innerWidth - pw - 8);
-    let y = r.bottom + 8;
-    if (y + ph > window.innerHeight - 8) y = Math.max(8, r.top - ph - 8);
-    cardPopAnchor = { x, y };
-    pop.style.left = x + 'px';
-    pop.style.top = y + 'px';
+    NC.placePopover(pop, btn.getBoundingClientRect());
+    cardPopAnchor = { x: parseFloat(pop.style.left), y: parseFloat(pop.style.top) };
+    btn.setAttribute('aria-expanded', 'true');
+    NC.focus(pop.querySelector('button'));
   }
 
   function buildCardPop() {
@@ -742,6 +762,7 @@ NC.library = (() => {
     const book = books.find((b) => b.id === cardPopBook);
     if (!book) { closeCardPop(); return; }
     const cur = metaOf(book.id);
+    const focused = [...pop.querySelectorAll('button')].indexOf(document.activeElement);
     pop.innerHTML = '';
 
     const h1 = document.createElement('h4');
@@ -767,6 +788,7 @@ NC.library = (() => {
     pop.appendChild(popItem('Nouveau groupe…', null, false, () => {
       openGroupPop({ mode: 'create', assignBookId: book.id, returnTo: 'cardpop' });
     }, 'ghost'));
+    if (focused >= 0) NC.focus(pop.querySelectorAll('button')[focused], pop.querySelector('button'));
   }
 
   function popItem(label, iconSvg, active, onClick, cls) {
@@ -792,10 +814,20 @@ NC.library = (() => {
   }
 
   function closeCardPop() {
+    const id = cardPopBook;
     cardPopBook = null;
     cardPopAnchor = null;
     const pop = NC.$('#card-pop');
-    if (pop) pop.hidden = true;
+    if (!pop || pop.hidden) return;
+    const restore = pop.contains(document.activeElement);
+    pop.hidden = true;
+    const menu = NC.$(`#book-grid [data-book-id="${CSS.escape(String(id))}"] .card-menu`);
+    menu?.setAttribute('aria-expanded', 'false');
+    if (restore) {
+      const card = menu?.closest('.card');
+      NC.focus(card?.querySelector('.card-open'), NC.$('#lib-search'));
+      NC.focus(menu);
+    }
   }
 
   /* ── Modale « groupe » : création et renommage (V2.14) ── */
@@ -810,29 +842,28 @@ NC.library = (() => {
     NC.$('#group-pop-title').textContent = groupPopMode.mode === 'rename' ? 'Renommer le groupe' : 'Nouveau groupe';
     NC.$('#group-save').textContent = groupPopMode.mode === 'rename' ? 'Renommer' : 'Créer';
     input.value = groupPopMode.mode === 'rename' ? (groupOf(groupPopMode.groupId) || {}).name || '' : '';
-    NC.$('#modal-backdrop').hidden = false;
+    const opener = document.activeElement;
     NC.$('#groups-manage').hidden = true; // si on vient de la gestion
-    pop.hidden = false;
-    input.focus();
+    NC.modal.show(pop, { backdrop: NC.$('#modal-backdrop'), initial: input, opener,
+      dismiss: closeGroupPop, fallback: () => groupPopMode?.returnTo === 'manage'
+        ? NC.$('#groups-manage-new') : NC.$('#card-pop button') || NC.$('#filter-groups .ghost') });
     input.select();
   }
 
   function closeGroupPop(backToManage) {
+    const fromManage = backToManage === 'manage' || groupPopMode?.returnTo === 'manage';
     if (groupPopMode && groupPopMode.returnTo === 'cardpop' && !backToManage && cardPopBook) {
       /* Le menu de rangement reprend la main, à jour, à sa place. */
       buildCardPop();
       const pop = NC.$('#card-pop');
       if (cardPopAnchor) { pop.style.left = cardPopAnchor.x + 'px'; pop.style.top = cardPopAnchor.y + 'px'; }
     }
-    groupPopMode = null;
-    NC.$('#group-pop').hidden = true;
-    if (backToManage === 'manage') {
-      NC.$('#modal-backdrop').hidden = false;
+    if (fromManage) {
       NC.$('#groups-manage').hidden = false;
       renderManageList();
-    } else {
-      NC.$('#modal-backdrop').hidden = true;
     }
+    NC.modal.hide(NC.$('#group-pop'));
+    groupPopMode = null;
   }
 
   async function saveGroupPop() {
@@ -868,14 +899,14 @@ NC.library = (() => {
 
   /* ── Modale « Gérer les groupes » (V2.14) ── */
   function openManage() {
-    NC.$('#modal-backdrop').hidden = false;
-    NC.$('#groups-manage').hidden = false;
     renderManageList();
+    NC.modal.show(NC.$('#groups-manage'), { backdrop: NC.$('#modal-backdrop'),
+      initial: NC.$('#groups-manage-close'), dismiss: closeManage,
+      fallback: () => NC.$('#filter-groups .manage') || NC.$('#filter-groups .ghost') });
   }
 
   function closeManage() {
-    NC.$('#groups-manage').hidden = true;
-    NC.$('#modal-backdrop').hidden = true;
+    NC.modal.hide(NC.$('#groups-manage'));
   }
 
   function renderManageList() {
@@ -962,11 +993,14 @@ NC.library = (() => {
     NC.$('#edit-title').value = book.title;
     NC.$('#edit-author').value = book.author || '';
     renderEditCover();
-    NC.$('#groups-manage').hidden = true; // une seule modale à la fois
-    NC.$('#modal-backdrop').hidden = false;
-    NC.$('#book-edit').hidden = false;
     const t = NC.$('#edit-title');
-    t.focus(); t.select();
+    NC.modal.show(NC.$('#book-edit'), { backdrop: NC.$('#modal-backdrop'), initial: t,
+      dismiss: closeBookEdit, fallback: () => {
+        const card = NC.$(`#book-grid [data-book-id="${CSS.escape(String(book.id))}"]`);
+        NC.focus(card?.querySelector('.card-open'));
+        return card?.querySelector('.card-edit') || NC.$('#lib-search');
+      } });
+    t.select();
   }
 
   function closeBookEdit() {
@@ -974,9 +1008,7 @@ NC.library = (() => {
     editCoverState = 'untouched';
     editCoverData = null;
     editExtractSeq++;
-    const m = NC.$('#book-edit');
-    if (m) m.hidden = true;
-    NC.$('#modal-backdrop').hidden = true; // la grille reprend la main
+    NC.modal.hide(NC.$('#book-edit'));
   }
 
   /* Aperçu de couverture : l'image de remplacement, celle de la fiche
@@ -1225,7 +1257,6 @@ NC.library = (() => {
       query = '';
       foldedQuery = '';
       renderFilters(); render();
-      search.blur();
     });
     sel.addEventListener('change', () => {
       sortState.by = sel.value;
@@ -1255,6 +1286,7 @@ NC.library = (() => {
     NC.db.onCatalogChange(() => { needsRefresh = true; refreshFromOtherTab(); });
     document.addEventListener('visibilitychange', refreshFromOtherTab);
     NC.$('#btn-add').addEventListener('click', () => NC.$('#file-input').click());
+    NC.$('#empty-add').addEventListener('click', () => NC.$('#file-input').click());
     const input = NC.$('#file-input');
     input.addEventListener('change', () => { importFiles(input.files); input.value = ''; });
     wireDnD();
@@ -1296,6 +1328,7 @@ NC.library = (() => {
       if (pop && !pop.hidden && !e.target.closest('#card-pop') && !e.target.closest('.card-menu')) closeCardPop();
     });
     NC.$('#book-grid').addEventListener('scroll', closeCardPop, { passive: true });
+    NC.$('#view-library').addEventListener('scroll', closeCardPop, { passive: true });
 
     /* Modales de groupes : boutons, Entrée = valider, Échap = annuler. */
     NC.$('#group-save').addEventListener('click', saveGroupPop);
@@ -1318,12 +1351,7 @@ NC.library = (() => {
     /* Échap referme d'abord les fenêtres de la bibliothèque. Le
        raccourci global du lecteur ne s'applique qu'à sa propre vue. */
     document.addEventListener('keydown', (e) => {
-      if (e.key !== 'Escape') return;
-      if (editBookId) closeBookEdit();
-      else if (!NC.$('#goal-pop').hidden) NC.goal.close(); // objectif (V2.24)
-      else if (groupPopMode) { const back = groupPopMode.returnTo === 'manage'; closeGroupPop(back ? 'manage' : undefined); }
-      else if (!NC.$('#groups-manage').hidden) closeManage();
-      else closeCardPop();
+      if (e.key === 'Escape') closeCardPop();
     });
 
     return refresh();
@@ -1332,7 +1360,7 @@ NC.library = (() => {
   /* _onDrop et _walkEntries : crochets de vérification (dépôt simulé
      avec entrées factices), même philosophie que NC.reader._state(). */
   return {
-    init, refresh, importFiles,
+    init, refresh, importFiles, focusBook,
     /* Packs (V2.22) : aperçu d'un fichier sans l'ajouter, import
        d'un fichier avec méta déjà lue, doublons, raison d'échec. */
     importOne, peepFile, librarySignatures, looksKnown, shortReason,

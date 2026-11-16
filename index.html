@@ -100,9 +100,12 @@
     <div class="empty-frame">
       <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 14c-3.6-2.6-8.2-3-12-1.5V37c3.8-1.5 8.4-1 12 1.5 3.6-2.5 8.2-3 12-1.5V12.5C32.2 11 27.6 11.4 24 14z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M24 14v24.5" stroke="currentColor" stroke-width="1.6"/><path d="M18 21h3M27 21h3M18 26h3M27 26h3" stroke="currentColor" stroke-width="1.2" opacity=".7"/></svg>
       <h2>Votre bibliothèque est vide</h2>
-      <p>Déposez ici un fichier <strong>EPUB</strong> ou <strong>PDF</strong>,<br>ou cliquez sur « Ajouter un livre ».</p>
-      <button id="empty-packs" class="mini-btn" type="button">Découvrir les packs de livres</button>
-      <p class="empty-hint">Tout reste sur votre ordinateur — rien n'est envoyé en ligne.</p>
+      <p>Importez un <strong>EPUB</strong> ou un <strong>PDF</strong> pour commencer.</p>
+      <div class="empty-actions">
+        <button id="empty-add" class="btn btn-gold" type="button">Ajouter un livre</button>
+        <button id="empty-packs" class="mini-btn" type="button">Découvrir les packs de livres</button>
+      </div>
+      <p class="empty-hint">Vous pouvez aussi déposer le fichier ici.</p>
     </div>
   </div>
 
@@ -115,7 +118,7 @@
   </div>
 
   <footer class="lib-foot">
-    <span class="foot-dot"></span> Vos livres ne quittent jamais cet ordinateur · <span id="lib-count">0 livre</span> · <button id="foot-backup" class="foot-backup" type="button" hidden></button>
+    <span class="foot-dot" aria-hidden="true"></span> Vos livres restent dans ce navigateur <span aria-hidden="true">·</span> <span id="lib-count" role="status">0 livre</span> <span aria-hidden="true">·</span> <button id="foot-backup" class="foot-backup" type="button" hidden></button>
   </footer>
 </main>
 
@@ -137,7 +140,7 @@
 
   <section id="packs-list" class="packs-list" aria-label="Packs disponibles">
     <div id="packs-note" class="packs-note" hidden>
-      <p id="packs-note-text"></p>
+      <p id="packs-note-text" role="status"></p>
       <button id="packs-retry" class="mini-btn" type="button" hidden>Réessayer</button>
     </div>
     <div id="packs-grid" class="packs-grid"></div>
@@ -168,14 +171,14 @@
       <div id="reader-loc" class="reader-loc">—</div>
     </div>
     <nav class="reader-actions" aria-label="Outils de lecture">
-      <button id="btn-font" class="icon-btn text-btn" type="button" title="Typographie : taille, police, interlignage, alignement" aria-label="Réglages de typographie">Aa</button>
-      <button id="btn-theme" class="icon-btn" type="button" title="Thème du livre : papier, sépia, nuit, OLED" aria-label="Choisir le thème du livre">
+      <button id="btn-font" class="icon-btn text-btn" type="button" title="Typographie : taille, police, interlignage, alignement" aria-label="Réglages de typographie" aria-controls="font-pop" aria-expanded="false">Aa</button>
+      <button id="btn-theme" class="icon-btn" type="button" title="Thème du livre : papier, sépia, nuit, OLED" aria-label="Choisir le thème du livre" aria-controls="theme-pop" aria-expanded="false">
         <svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
       </button>
       <button id="btn-flow" class="icon-btn" type="button" title="Mode de lecture : défilement vertical" aria-label="Basculer entre pages et défilement vertical" aria-pressed="false">
         <svg viewBox="0 0 24 24"><path d="M4 6h10M4 11h10M4 16h10"/><path d="M18 5v13M15.2 15.4L18 18.2l2.8-2.8"/></svg>
       </button>
-      <button id="btn-spread" class="icon-btn" type="button" title="Vue double page / simple page" aria-label="Basculer vue double / simple page">
+      <button id="btn-spread" class="icon-btn" type="button" title="Vue double page / simple page" aria-label="Vue double page" aria-pressed="false">
         <svg viewBox="0 0 24 24"><rect x="3" y="5" width="8" height="14" rx="1"/><rect x="13" y="5" width="8" height="14" rx="1"/></svg>
       </button>
       <button id="btn-focus" class="icon-btn" type="button" title="Mode concentration — lecture épurée" aria-label="Mode concentration" aria-pressed="false">
@@ -211,7 +214,7 @@
     </nav>
   </header>
 
-  <div id="stage">
+  <div id="stage" tabindex="0" role="region" aria-label="Zone de lecture">
     <div id="book-frame">
       <div id="epub-host"></div>
       <div id="pdf-stage" hidden></div>
@@ -276,7 +279,7 @@
   <div id="note-pop" hidden role="dialog" aria-labelledby="note-pop-title">
     <h4 id="note-pop-title">Note personnelle</h4>
     <blockquote id="note-pop-quote"></blockquote>
-    <textarea id="note-pop-text" rows="5" maxlength="4000" placeholder="Votre note au sujet de ce passage…"></textarea>
+    <textarea id="note-pop-text" rows="5" maxlength="4000" aria-label="Texte de la note" placeholder="Votre note au sujet de ce passage…"></textarea>
     <div class="note-pop-foot">
       <span class="note-pop-hint">Ctrl+Entrée pour enregistrer · Échap pour annuler</span>
       <div class="note-pop-actions">
@@ -287,12 +290,12 @@
   </div>
 
   <!-- Popover taille du texte -->
-  <div id="font-pop" hidden>
+  <div id="font-pop" hidden role="group" aria-label="Réglages de lecture">
     <div id="font-pop-body"></div>
   </div>
 
   <!-- Popover thème du livre -->
-  <div id="theme-pop" hidden>
+  <div id="theme-pop" hidden role="group" aria-label="Thème du livre">
     <div id="theme-pop-body"></div>
   </div>
 
@@ -301,8 +304,11 @@
 
   <!-- Mémo des raccourcis clavier (n°19) : « ? » ou le bouton clavier
        de la barre du haut — la liste complète, groupée par usage. -->
-  <div id="kbd-pop" hidden role="dialog" aria-modal="true" aria-labelledby="kbd-pop-title" tabindex="-1">
-    <h4 id="kbd-pop-title">Raccourcis clavier</h4>
+  <div id="kbd-pop" hidden role="dialog" aria-labelledby="kbd-pop-title" tabindex="-1">
+    <div class="kbd-head">
+      <h4 id="kbd-pop-title">Raccourcis clavier</h4>
+      <button id="kbd-close" class="mini-btn" type="button">Fermer</button>
+    </div>
     <div class="kbd-cols">
       <section class="kbd-sec">
         <h5>Lecture</h5>
@@ -337,7 +343,7 @@
         <div class="kbd-row"><span>Ce mémo</span><span class="kbd-keys"><kbd>?</kbd></span></div>
       </section>
     </div>
-    <p class="kbd-foot">Échap referme le mémo · dans un champ de saisie, les lettres gardent leur rôle normal</p>
+    <p class="kbd-foot">Les touches de lecture sont actives dans la zone du livre. Échap referme ce mémo.</p>
   </div>
 
   <!-- Export des citations (n°11) : les soulignages & notes relus une
@@ -375,7 +381,7 @@
 <div id="modal-backdrop" hidden></div>
 <div id="group-pop" hidden role="dialog" aria-modal="true" aria-labelledby="group-pop-title">
   <h4 id="group-pop-title">Nouveau groupe</h4>
-  <input id="group-pop-name" type="text" maxlength="40" placeholder="Nom du groupe — Polars, SF, À relire…" autocomplete="off">
+  <input id="group-pop-name" type="text" maxlength="40" aria-label="Nom du groupe" placeholder="Polars, SF, À relire…" autocomplete="off">
   <div class="modal-actions">
     <button id="group-cancel" class="mini-btn" type="button">Annuler</button>
     <button id="group-save" class="btn btn-gold" type="button">Créer</button>
@@ -396,7 +402,7 @@
      Remplie et câblée par js/backup.js. -->
 <div id="backup-backdrop" hidden></div>
 <div id="backup-pop" hidden role="dialog" aria-modal="true" aria-labelledby="backup-pop-title">
-  <h4 id="backup-pop-title">Sauvegarde de la bibliothèque</h4>
+  <h4 id="backup-pop-title" tabindex="-1">Sauvegarde de la bibliothèque</h4>
   <p class="backup-lead">Tout vit dans ce navigateur : livres, couvertures, soulignages &amp; notes, signets, progression, groupes, statistiques et objectif. Une sauvegarde rassemble le tout dans <strong>un seul fichier</strong> — à garder précieusement (clé USB, autre disque, nuage à vous). Purge des données du site, nouvel ordinateur : elle rend tout.</p>
   <p id="backup-last" class="backup-last"></p>
   <div class="backup-actions">
@@ -407,21 +413,23 @@
     <div class="backup-modes">
       <div class="backup-mode">
         <h5>Fusionner</h5>
-        <p>Ajoute ce qui manque à la bibliothèque actuelle, sans rien effacer. Les données les plus récentes gagnent.</p>
+        <p>Ajoute les éléments manquants. La progression, les préférences et les fiches suivent leur date de modification.</p>
         <button id="backup-merge" class="mini-btn" type="button">Choisir un fichier…</button>
       </div>
       <div class="backup-mode">
         <h5>Remplacer</h5>
-        <p>Efface la bibliothèque actuelle et la rend exactement comme dans la sauvegarde. Une confirmation est demandée.</p>
+        <p>Remplace les livres et les données de lecture par le contenu de la sauvegarde. Une confirmation est demandée.</p>
         <button id="backup-replace" class="mini-btn" type="button">Choisir un fichier…</button>
+        <p id="backup-replace-summary" role="status" hidden></p>
+        <button id="backup-replace-cancel" class="mini-btn" type="button" hidden>Annuler le remplacement</button>
       </div>
     </div>
   </div>
   <div class="modal-actions">
     <button id="backup-close" class="mini-btn" type="button">Fermer</button>
   </div>
+  <input id="backup-file-input" type="file" accept=".zip,application/zip" hidden>
 </div>
-<input id="backup-file-input" type="file" accept=".zip,application/zip" hidden>
 
 <!-- Objectif de lecture (V2.24) : la fiche de l'objectif — gros compte,
      période, temps restant, allure conseillée, livres comptés datés —
@@ -453,8 +461,8 @@
     <button id="edit-cancel" class="mini-btn" type="button">Annuler</button>
     <button id="edit-save" class="btn btn-gold" type="button">Enregistrer</button>
   </div>
+  <input id="edit-cover-input" type="file" accept="image/*" hidden>
 </div>
-<input id="edit-cover-input" type="file" accept="image/*" hidden>
 
 <!-- Bibliothèques embarquées (le site fonctionne même hors-ligne) -->
 <script src="vendor/jszip.min.js"></script>

@@ -222,6 +222,119 @@ NC.downloadBlob = function (blob, filename) {
 
 NC.tick = () => new Promise((r) => setTimeout(r, 0));
 
+NC.focus = function (...targets) {
+  for (const target of targets) {
+    const element = typeof target === 'function' ? target() : target;
+    if (!element?.isConnected || element === document.body ||
+        element.closest('[hidden], [inert]') || !element.getClientRects().length) continue;
+    element.focus({ preventScroll: true });
+    if (document.activeElement === element) return;
+  }
+};
+
+NC.modal = (() => {
+  const stack = [];
+  const madeInert = new Set();
+  const selector = 'button, input, select, textarea, a[href], summary, [tabindex]';
+
+  function updateBackground() {
+    for (const element of madeInert) element.inert = false;
+    madeInert.clear();
+    const layer = stack.at(-1);
+    if (!layer) return;
+    const permitted = [layer.panel, layer.backdrop, ...layer.extras, NC.$('#toasts')].filter(Boolean);
+    for (let node = layer.panel; node.parentElement && node !== document.body; node = node.parentElement) {
+      for (const sibling of node.parentElement.children) {
+        if (sibling.inert || permitted.some((item) => sibling.contains(item))) continue;
+        sibling.inert = true;
+        madeInert.add(sibling);
+      }
+    }
+  }
+
+  function items(layer) {
+    return [layer.panel, ...layer.extras].flatMap((node) => Array.from(node.querySelectorAll(selector)))
+      .filter((element) => element.tabIndex >= 0 && !element.matches(':disabled') &&
+        !element.closest('[hidden], [inert]') && element.getClientRects().length);
+  }
+
+  document.addEventListener('keydown', (event) => {
+    const layer = stack.at(-1);
+    if (!layer || event.isComposing) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      layer.dismiss();
+    } else if (event.key === 'Tab') {
+      const elements = items(layer);
+      const index = elements.indexOf(document.activeElement);
+      if (index < 0 || (event.shiftKey ? index === 0 : index === elements.length - 1)) {
+        event.preventDefault();
+        NC.focus(event.shiftKey ? elements.at(-1) : elements[0], layer.panel);
+      }
+    }
+  }, true);
+
+  return {
+    show(panel, { backdrop, initial, dismiss, opener = document.activeElement, fallback, extras = [] }) {
+      if (stack.some((layer) => layer.panel === panel)) return;
+      const layer = { panel, backdrop, dismiss, opener, fallback, extras };
+      panel.tabIndex = -1;
+      panel.hidden = false;
+      if (backdrop) backdrop.hidden = false;
+      stack.push(layer);
+      updateBackground();
+      NC.focus(initial, items(layer)[0], panel);
+    },
+    hide(panel) {
+      const index = stack.findIndex((layer) => layer.panel === panel);
+      if (index < 0) return;
+      const [layer] = stack.splice(index, 1);
+      panel.hidden = true;
+      if (layer.backdrop && !stack.some((entry) => entry.backdrop === layer.backdrop)) layer.backdrop.hidden = true;
+      updateBackground();
+      const top = stack.at(-1);
+      if (index === stack.length) NC.focus(layer.opener, layer.fallback, top?.panel);
+    },
+  };
+})();
+
+function visibleViewport() {
+  const v = window.visualViewport;
+  const root = document.documentElement;
+  const width = Math.min(v?.width || root.clientWidth, root.clientWidth);
+  return { left: Math.max(0, Math.min(v?.offsetLeft || 0, root.clientWidth - width)),
+    top: v?.offsetTop || 0, width, height: v?.height || window.innerHeight };
+}
+
+NC.placePopover = function (panel, anchor, { center = false, above = false } = {}) {
+  // Une ancienne position peut agrandir la zone visible à la réouverture.
+  panel.style.left = '0px';
+  panel.style.top = '0px';
+  const view = visibleViewport();
+  const css = getComputedStyle(document.documentElement);
+  const edge = (side) => 12 + (parseFloat(css.getPropertyValue('--safe-' + side)) || 0);
+  const width = panel.offsetWidth;
+  const height = panel.offsetHeight;
+  const x = center ? (anchor.left + anchor.right - width) / 2 : anchor.left;
+  const upper = anchor.top - height - 8;
+  const lower = anchor.bottom + 8;
+  const top = (above && upper >= view.top + edge('t')) || lower + height > view.top + view.height - edge('b')
+    ? upper : lower;
+  panel.style.left = Math.max(view.left + edge('l'), Math.min(x, view.left + view.width - width - edge('r'))) + 'px';
+  panel.style.top = Math.max(view.top + edge('t'), Math.min(top, view.top + view.height - height - edge('b'))) + 'px';
+};
+
+function updateVisibleViewport() {
+  const { height, top } = visibleViewport();
+  document.documentElement.style.setProperty('--visible-height', height + 'px');
+  document.documentElement.style.setProperty('--visible-top', top + 'px');
+}
+window.visualViewport?.addEventListener('resize', updateVisibleViewport);
+window.visualViewport?.addEventListener('scroll', updateVisibleViewport);
+window.addEventListener('resize', updateVisibleViewport);
+updateVisibleViewport();
+
 NC.archive = (() => {
   const MiB = 1024 * 1024;
   const maxBook = 256 * MiB;

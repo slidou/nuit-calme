@@ -262,9 +262,11 @@ NC.goal = (() => {
     if (!el) return;
     const hasBooks = !!(NC.library.count && NC.library.count() > 0);
     el.hidden = !hasBooks;
+    const restoreFocus = el.contains(document.activeElement);
     el.innerHTML = '';
     if (!hasBooks) return;
     el.appendChild(makeBanner());
+    if (restoreFocus) NC.focus(el.firstElementChild);
   }
 
   /* ── Modale ──
@@ -274,10 +276,12 @@ NC.goal = (() => {
      recalculée sous les yeux au fil du choix. */
   function renderModal() {
     const pop = NC.$('#goal-pop');
-    if (!pop || pop.hidden) return;
+    if (!pop) return;
+    const restoreFocus = pop.contains(document.activeElement);
     pop.innerHTML = '';
     if (mode === 'form') pop.appendChild(formView());
     else pop.appendChild(detailView());
+    if (restoreFocus) NC.focus(pop.querySelector('input, select, button'), pop);
   }
 
   function detailView() {
@@ -390,12 +394,14 @@ NC.goal = (() => {
     num.min = '1'; num.max = '999'; num.step = '1';
     num.value = goal ? goal.target : 12;
     num.id = 'goal-num';
+    labN.htmlFor = num.id;
 
     const labP = document.createElement('label');
     labP.className = 'goal-lab';
     labP.textContent = 'Échéance';
     const sel = document.createElement('select');
     sel.id = 'goal-period';
+    labP.htmlFor = sel.id;
     for (const p of PERIODS) {
       const o = document.createElement('option');
       o.value = p.key; o.textContent = p.label;
@@ -419,6 +425,7 @@ NC.goal = (() => {
     const date = document.createElement('input');
     date.type = 'date';
     date.id = 'goal-date';
+    date.setAttribute('aria-label', 'Date de fin de l’objectif');
     date.min = tKey;
     date.value = goal ? goal.end : '';
     date.hidden = curPeriod !== 'date';
@@ -427,6 +434,7 @@ NC.goal = (() => {
        2 décembre — 30 jours » ; et un rappel de ce que compte le preset. */
     const see = document.createElement('p');
     see.className = 'goal-see';
+    see.setAttribute('role', 'status');
     const seeUpdate = () => {
       const r = sel.value === 'date'
         ? periodRange('date', tKey, date.value)
@@ -491,17 +499,13 @@ NC.goal = (() => {
     const pop = NC.$('#goal-pop');
     const back = NC.$('#modal-backdrop');
     if (!pop) return;
-    pop.hidden = false;
-    if (back) back.hidden = false;
     renderModal();
-    const focusable = pop.querySelector('input, select, button');
-    if (focusable) { try { focusable.focus({ preventScroll: true }); } catch (e) { /* vieux navigateur */ } }
+    NC.modal.show(pop, { backdrop: back, initial: pop.querySelector('input, select, button'),
+      dismiss: close, fallback: () => NC.$('#goal-banner [role="button"]') });
   }
   function close() {
     const pop = NC.$('#goal-pop');
-    if (pop) pop.hidden = true;
-    const back = NC.$('#modal-backdrop');
-    if (back) back.hidden = true;
+    if (pop) NC.modal.hide(pop);
     mode = goal ? 'view' : 'form';
     confirmRemove = false;
   }

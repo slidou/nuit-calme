@@ -27,8 +27,8 @@ NC.backup = (() => {
   const DAY = 86400000;
 
   let busy = false;        // un export ou une restauration en vol
-  let armedReplace = null; // { file, manifest, timer } — remplacement en attente de confirmation
-  let escBound = null;     // gestionnaire Échap le temps que la modale est ouverte
+  let armedReplace = null;
+  let previewGeneration = 0;
 
   const $ = (sel) => NC.$(sel);
 
@@ -266,6 +266,7 @@ NC.backup = (() => {
     disarmReplace();
     const zone = $('#backup-import-zone');
     if (zone) zone.hidden = true;
+    $('#backup-import').setAttribute('aria-expanded', 'false');
     const last = readLast();
     const el = $('#backup-last');
     if (el) {
@@ -273,32 +274,26 @@ NC.backup = (() => {
         ? `Dernière sauvegarde : ${lastLabel(last.at)} — ${last.books} livre${last.books > 1 ? 's' : ''} à l\u2019époque.`
         : 'Aucune sauvegarde pour l\u2019instant — un seul fichier suffit à tout garder.';
     }
-    const pop = $('#backup-pop'), back = $('#backup-backdrop');
-    if (pop) pop.hidden = false;
-    if (back) back.hidden = false;
-    escBound = (e) => { if (e.key === 'Escape') closeModal(); };
-    document.addEventListener('keydown', escBound);
+    NC.modal.show($('#backup-pop'), {
+      backdrop: $('#backup-backdrop'), initial: $('#backup-pop-title'), dismiss: closeModal,
+      fallback: () => $('#btn-backup'),
+    });
   }
   function closeModal() {
     disarmReplace();
-    const pop = $('#backup-pop'), back = $('#backup-backdrop');
-    if (pop) pop.hidden = true;
-    if (back) back.hidden = true;
-    if (escBound) { document.removeEventListener('keydown', escBound); escBound = null; }
+    NC.modal.hide($('#backup-pop'));
   }
 
-  /* Le remplacement ne part jamais d'un clic distrait : le bouton
-     s'arme (texte + teinte), et seul un second clic dans les six
-     secondes exécute — la maison des suppressions. */
   function disarmReplace() {
-    if (armedReplace) {
-      clearTimeout(armedReplace.timer);
-      armedReplace = null;
-    }
+    previewGeneration++;
+    armedReplace = null;
     const btn = $('#backup-replace');
     if (btn) {
       btn.classList.remove('confirm');
-      btn.textContent = 'Remplacer…';
+      btn.textContent = 'Choisir un fichier…';
+      btn.removeAttribute('aria-describedby');
+      $('#backup-replace-summary').hidden = true;
+      $('#backup-replace-cancel').hidden = true;
     }
   }
   function armReplace(file, manifest) {
@@ -306,10 +301,17 @@ NC.backup = (() => {
     const btn = $('#backup-replace');
     if (!btn) return;
     const n = (manifest.counts && manifest.counts.books) || 0;
-    const when = manifest.createdAt ? new Date(manifest.createdAt).toLocaleDateString('fr-FR') : '';
-    armedReplace = { file, manifest, timer: setTimeout(disarmReplace, 6000) };
+    const date = new Date(manifest.createdAt);
+    const when = Number.isFinite(date.getTime()) ? ' du ' + date.toLocaleDateString('fr-FR') : '';
+    armedReplace = file;
     btn.classList.add('confirm');
-    btn.textContent = `Confirmer : ${n} livre${n > 1 ? 's' : ''} du ${when} écraseront tout`;
+    btn.textContent = 'Confirmer le remplacement';
+    btn.setAttribute('aria-describedby', 'backup-replace-summary');
+    const summary = $('#backup-replace-summary');
+    summary.hidden = false;
+    summary.textContent = `Sauvegarde${when} · ${n} livre${n > 1 ? 's' : ''}. Elle remplacera la bibliothèque actuelle.`;
+    $('#backup-replace-cancel').hidden = false;
+    NC.focus($('#backup-replace-cancel'));
   }
 
   async function runImport(file, mode) {
@@ -370,13 +372,14 @@ NC.backup = (() => {
       if (zone) {
         zone.hidden = !zone.hidden;
         if (btn) btn.setAttribute('aria-expanded', zone.hidden ? 'false' : 'true');
-        if (!zone.hidden) disarmReplace();
+        disarmReplace();
       }
     });
-    on('#backup-merge', () => { const i = $('#backup-file-input'); if (i) { i.dataset.mode = 'merge'; i.click(); } });
+    on('#backup-merge', () => { disarmReplace(); const i = $('#backup-file-input'); if (i) { i.dataset.mode = 'merge'; i.click(); } });
+    on('#backup-replace-cancel', () => { disarmReplace(); NC.focus($('#backup-replace')); });
     on('#backup-replace', () => {
       if (armedReplace) { // second clic : on y va vraiment
-        const f = armedReplace.file;
+        const f = armedReplace;
         disarmReplace();
         runImport(f, 'replace');
         return;
@@ -391,9 +394,10 @@ NC.backup = (() => {
       if (!file || busy) return;
       const mode = input.dataset.mode === 'replace' ? 'replace' : 'merge';
       if (mode === 'merge') { runImport(file, 'merge'); return; }
+      const generation = ++previewGeneration;
       try { // remplacement : un coup d'œil d'abord, la confirmation ensuite
         const { manifest } = await peek(file);
-        armReplace(file, manifest);
+        if (generation === previewGeneration) armReplace(file, manifest);
       } catch (err) {
         NC.toast(/étranger/.test(String(err && err.message))
           ? 'Ce fichier n\u2019est pas une sauvegarde Nuit Calme.'

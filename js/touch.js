@@ -62,10 +62,7 @@ NC.touch = (() => {
     let closed = false;
     const sel = document.querySelector('#sel-popup');
     if (sel && !sel.hidden && typeof c.hideSelPopup === 'function') { c.hideSelPopup(); closed = true; }
-    ['#font-pop', '#theme-pop'].forEach((id) => {
-      const el = document.querySelector(id);
-      if (el && !el.hidden) { el.hidden = true; closed = true; }
-    });
+    for (const kind of ['font', 'theme']) closed = NC.reader.closeReadingPop(kind) || closed;
     return closed;
   }
 

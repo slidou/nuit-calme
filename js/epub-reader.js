@@ -21,6 +21,7 @@ const NC_FOCUS_CSS = [
   'html.nc-focus figcaption, html.nc-focus div { opacity:.15; transition:opacity .18s ease; }',
   'html.nc-focus .nc-focus-open, html.nc-focus .nc-focus-now { opacity:1 !important; }',
   'html.nc-focus .nc-focus-now, html.nc-focus .nc-focus-now * { opacity:1 !important; transition:none; }',
+  '@media (prefers-reduced-motion: reduce) { html.nc-focus * { transition:none !important; } }',
 ].join('\n');
 
 NC.openEpub = async function (rec, opts) {
@@ -103,6 +104,7 @@ NC.openEpub = async function (rec, opts) {
       try { if (ctl.focus) contents.document.documentElement.classList.add('nc-focus'); } catch (e) {}
       try { wireWheelNav(contents); } catch (e) { console.error(e); }
       wireEdgeTurn(contents);
+      contents.document.addEventListener('keydown', NC.reader.onContentKey);
       /* Gestes tactiles (V2.17) : balayages, zones de tap et pinch à
          l'intérieur du papier — un toucher sur l'iframe n'arrive jamais
          au document parent. Échoue doucement si le module est absent. */
@@ -556,7 +558,7 @@ NC.openEpub = async function (rec, opts) {
     if (!text) return;
     ctl._pendingSel = { cfi, text };
 
-    let x = window.innerWidth / 2, y = 140;
+    let anchor = host.getBoundingClientRect();
     try {
       const rect = sel.getRangeAt(0).getBoundingClientRect();
       const frameEl = selFrame || host.querySelector('iframe');
@@ -565,17 +567,13 @@ NC.openEpub = async function (rec, opts) {
         /* #sel-popup est en position:fixed → coordonnées VIEWPORT.
            rect est relatif à l'iframe ; fr le repositionne dans la page.
            (Avant, on soustrayait #stage → popup décalé de la hauteur du header.) */
-        x = fr.left + rect.left + rect.width / 2;
-        y = fr.top + rect.top;
+        anchor = { left: fr.left + rect.left, right: fr.left + rect.right,
+          top: fr.top + rect.top, bottom: fr.top + rect.bottom };
       }
     } catch (e) {}
     const pop = NC.$('#sel-popup');
     pop.hidden = false;
-    const pw = pop.offsetWidth || 190;
-    x = Math.max(12, Math.min(window.innerWidth - pw - 12, x - pw / 2));
-    y = Math.max(60, y - 48);
-    pop.style.left = x + 'px';
-    pop.style.top = y + 'px';
+    NC.placePopover(pop, anchor, { center: true, above: true });
   }
 
   ctl.hideSelPopup = () => {

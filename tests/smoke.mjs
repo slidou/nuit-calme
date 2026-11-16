@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
@@ -481,6 +481,247 @@ async function testMigration(cdp, port) {
   }
 }
 
+async function testUx(cdp) {
+  const active = () => cdp.run("document.activeElement.id || document.activeElement.className");
+  const focus = (selector) => cdp.run(`document.querySelector(${JSON.stringify(selector)}).focus()`);
+  const click = async (selector) => {
+    await focus(selector);
+    return cdp.run(`document.querySelector(${JSON.stringify(selector)}).click()`);
+  };
+  const key = async (key, keyCode, modifiers = 0) => {
+    const event = { key, code: key.length === 1 ? 'Key' + key.toUpperCase() : key,
+      windowsVirtualKeyCode: keyCode, modifiers };
+    await cdp.send('Input.dispatchKeyEvent', { ...event, type: 'keyDown',
+      ...(key === 'Enter' ? { text: '\r', unmodifiedText: '\r' } : {}) });
+    await cdp.send('Input.dispatchKeyEvent', { ...event, type: 'keyUp' });
+  };
+  const setViewport = (width, height, mobile = false) => cdp.send('Emulation.setDeviceMetricsOverride', {
+    width, height, mobile, deviceScaleFactor: 1,
+    screenOrientation: { type: width > height ? 'landscapePrimary' : 'portraitPrimary',
+      angle: width > height ? 90 : 0 },
+  });
+  const save = async (name) => {
+    if (!process.env.NC_UX_OUT) return;
+    const folder = resolve(process.env.NC_UX_OUT);
+    await mkdir(folder, { recursive: true });
+    await delay(300);
+    const { data } = await cdp.send('Page.captureScreenshot', { format: 'png' });
+    await writeFile(join(folder, name + '.png'), Buffer.from(data, 'base64'));
+  };
+  await cdp.send('Page.enable');
+  await cdp.send('Page.bringToFront');
+  await setViewport(1440, 900);
+  await save('01-bibliotheque-vide');
+  const ids = await cdp.run(`(${async function seed(fixture) {
+    const { epubBlob, pdf } = await fixture();
+    const files = new DataTransfer();
+    files.items.add(new File([epubBlob], 'Lecture.epub', { type: 'application/epub+zip' }));
+    files.items.add(new File([pdf], 'Lecture.pdf', { type: 'application/pdf' }));
+    const input = document.querySelector('#file-input');
+    input.files = files.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    for (let attempt = 0; attempt < 100 && document.querySelectorAll('.card-open').length < 2; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+    const books = await NC.db.allBooks();
+    const epub = books.find((book) => book.type === 'epub');
+    const paper = books.find((book) => book.type === 'pdf');
+    await NC.db.putSetting('spread', 'none');
+    await NC.db.putAnnotation({ id: 'note-ux', bookId: epub.id, kind: 'note',
+      text: 'Le phare', note: 'Note de test', sectionIndex: 0, start: 0, end: 8, createdAt: Date.now() });
+    return { epub: epub.id, paper: paper.id };
+  }})(${makeBooks})`);
+
+  await focus('#btn-backup');
+  await key('Enter', 13);
+  assert.equal(await active(), 'backup-pop-title');
+  assert.equal(await cdp.run("document.querySelector('#view-library').inert"), true);
+  await key('Tab', 9, 8);
+  assert.equal(await active(), 'backup-close');
+  await key('Tab', 9);
+  assert.equal(await active(), 'backup-export');
+  await click('#backup-import');
+  await cdp.run(`(async () => {
+    const archive = await NC.backup.exportAll({ silent: true });
+    const data = new DataTransfer();
+    data.items.add(new File([archive.blob], 'sauvegarde.zip'));
+    const input = document.querySelector('#backup-file-input');
+    input.dataset.mode = 'replace';
+    input.files = data.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await until(() => cdp.run("!document.querySelector('#backup-replace-cancel').hidden"));
+  assert.equal(await active(), 'backup-replace-cancel');
+  await key('Enter', 13);
+  assert.equal(await active(), 'backup-replace');
+  assert.equal(await cdp.run('NC.db.countBooks()'), 2);
+  await key('Escape', 27);
+  assert.equal(await active(), 'btn-backup');
+  assert.equal(await cdp.run("document.querySelector('#view-library').inert"), false);
+  await click('#goal-banner [role="button"]');
+  assert.equal(await active(), 'goal-num');
+  assert.equal(await cdp.run("document.querySelector('#goal-num').labels[0].textContent"), 'Nombre de livres à finir');
+  await key('Escape', 27);
+  await click('#filter-groups .ghost');
+  assert.equal(await active(), 'group-pop-name');
+  await cdp.run("document.querySelector('#group-pop-name').value = 'Essai clavier'");
+  await key('Enter', 13);
+  await until(() => cdp.run("!document.querySelector('#filter-groups .manage')?.closest('[inert]') && !!document.querySelector('#filter-groups .manage')"));
+  await click('#filter-groups .manage');
+  await click('#groups-manage-new');
+  assert.equal(await active(), 'group-pop-name');
+  await key('Escape', 27);
+  assert.equal(await active(), 'groups-manage-new');
+  await key('Escape', 27);
+  assert.equal(await active(), 'chip ghost manage');
+  await focus(`[data-book-id="${ids.epub}"] .card-open`);
+  await click(`[data-book-id="${ids.epub}"] .card-edit`);
+  assert.equal(await active(), 'edit-title');
+  await key('Escape', 27);
+  assert.equal(await active(), 'card-edit');
+  console.log('OK — import via le champ de fichiers, focus et retour des dialogues, groupes imbriqués et confirmation de sauvegarde.');
+
+  const epubButton = `[data-book-id="${ids.epub}"] .card-open`;
+  await focus(epubButton);
+  await key('Enter', 13);
+  await until(() => cdp.run("NC.reader._state().ctl?.type === 'epub' && document.querySelector('#stage').getAttribute('aria-busy') === 'false'"));
+  assert.equal(await active(), 'stage');
+  await save('02-lecture-ordinateur');
+  await key('r', 82);
+  assert.equal(await active(), '');
+  assert.equal(await cdp.run("document.activeElement.matches('#drawer input[type=search]')"), true);
+  await cdp.run("document.activeElement.value = 'phare'");
+  await key('Enter', 13);
+  await until(() => cdp.run("Boolean(document.querySelector('.res-item'))"));
+  assert.match(await cdp.run("document.querySelector('#drawer [role=status]').textContent"), /passage/);
+  await key('Escape', 27);
+  assert.equal(await active(), 'stage');
+  await click('#btn-notes');
+  await until(() => cdp.run("Boolean(document.querySelector('.note-item'))"));
+  await click('#drawer-export');
+  await until(() => cdp.run("!document.querySelector('#export-pop').hidden"));
+  assert.equal(await active(), 'export-cancel');
+  await key('Shift', 16);
+  await key('Tab', 9, 8);
+  assert.equal(await active(), 'export-md');
+  await key('Escape', 27);
+  assert.equal(await active(), 'drawer-export');
+  await click('.note-cat-btn');
+  assert.equal(await cdp.run("document.activeElement.closest('#cat-pop') !== null"), true);
+  await key('Escape', 27);
+  assert.equal(await active(), 'note-cat-btn');
+  await click('.note-actions .mini-btn:nth-child(2)');
+  assert.equal(await active(), 'note-pop-text');
+  await key('Escape', 27);
+  assert.equal(await cdp.run("document.querySelector('#note-pop').hidden && !document.querySelector('#drawer').hidden"), true);
+  await key('Escape', 27);
+  assert.equal(await active(), 'btn-notes');
+  await click('#btn-font');
+  assert.equal(await cdp.run("document.activeElement.closest('#font-pop') !== null"), true);
+  await key('Escape', 27);
+  assert.equal(await active(), 'btn-font');
+  await click('#btn-kbd');
+  assert.equal(await active(), 'kbd-close');
+  await key('Escape', 27);
+  assert.equal(await active(), 'btn-kbd');
+  await click('#btn-back');
+  await until(() => cdp.run("document.activeElement.matches('.card-open')"));
+  assert.equal(await cdp.run("document.activeElement.closest('.card').dataset.bookId"), ids.epub);
+  console.log('OK — ouverture clavier, recherche, notes, catégorie, export imbriqué, réglages et restitution à la fiche.');
+
+  await cdp.run(`NC.reader.open(${JSON.stringify(ids.paper)})`);
+  await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+  await focus('#stage');
+  await key('ArrowRight', 39);
+  await until(() => cdp.run("NC.reader._state().ctl.page === 2"));
+  await until(() => cdp.run("document.querySelector('#progress').getAttribute('aria-valuetext') === '100 %'"));
+  assert.equal(await cdp.run("document.querySelector('.flip') === null"), true);
+  await click('#btn-bookmark');
+  await until(() => cdp.run("document.querySelector('#btn-bookmark').getAttribute('aria-pressed') === 'true'"));
+  assert.equal(await active(), 'btn-bookmark');
+  await click('#btn-toc');
+  assert.equal(await active(), 'drawer-close');
+  assert.equal(await cdp.run("Boolean(document.querySelector('.thumb-cell'))"), true);
+  await key('Escape', 27);
+  await click('#btn-stats');
+  await until(() => cdp.run("document.querySelector('#drawer-body').textContent.trim().length > 0"));
+  await key('Escape', 27);
+  await cdp.run(`(() => {
+    const text = Array.from(document.querySelectorAll('.nc-text-layer span')).find((node) => node.textContent.includes('phare'));
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    const selection = document.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new MouseEvent('mouseup'));
+  })()`);
+  assert.equal(await cdp.run("document.querySelector('#sel-popup').hidden"), false);
+  await click('#sel-highlight');
+  await until(() => cdp.run("document.querySelector('#sel-popup').hidden && Boolean(document.querySelector('#pdf-stage [data-nc-ann]'))"));
+  console.log('OK — PDF, navigation sans animation, signets, vignettes, statistiques et menu de sélection.');
+
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });
+  for (const [width, height] of [[320, 640], [390, 844], [667, 375], [768, 1024], [1024, 768]]) {
+    await setViewport(width, height, true);
+    await delay(330);
+    const geometry = await cdp.run(`(() => {
+      const out = (element) => element.getBoundingClientRect().right > document.documentElement.clientWidth + 1;
+      return { width: document.documentElement.clientWidth, title: document.querySelector('.reader-title').clientWidth,
+        out: [...document.querySelectorAll('.reader-actions button:not([hidden])')].filter(out).map(button => button.id),
+        stage: document.querySelector('#stage').clientHeight, progress: document.querySelector('#progress').clientHeight };
+    })()`);
+    assert.equal(geometry.width, width);
+    assert.ok(geometry.title >= 95, JSON.stringify(geometry));
+    assert.deepEqual(geometry.out, []);
+    assert.ok(geometry.stage > 170, JSON.stringify(geometry));
+    assert.ok(geometry.progress >= 24);
+    await click('#btn-font');
+    const panel = await cdp.run(`(() => {
+      const pop = document.querySelector('#font-pop');
+      const { left, right, top, bottom } = pop.getBoundingClientRect();
+      return { left, right, top, bottom, hidden: pop.hidden, viewport: visualViewport.height,
+        viewportTop: visualViewport.offsetTop, viewportWidth: visualViewport.width,
+        viewportLeft: visualViewport.offsetLeft, visibleHeight: document.documentElement.style.getPropertyValue('--visible-height') };
+    })()`);
+    assert.ok(!panel.hidden && panel.left >= 0 && panel.right <= width + 1 && panel.bottom <= height + 1,
+      JSON.stringify({ width, height, panel }));
+    await key('Escape', 27);
+    console.log(`OK — ${width} × ${height}, barre complète et réglages visibles, scène ${geometry.stage} px.`);
+  }
+  await setViewport(390, 844, true);
+  await save('03-pdf-telephone');
+  await click('#btn-search');
+  await save('04-recherche-telephone');
+  await setViewport(390, 320, true);
+  await until(() => cdp.run("document.querySelector('#drawer').getBoundingClientRect().bottom <= 321"));
+  await key('Escape', 27);
+  await setViewport(390, 844, true);
+  const point = await cdp.run(`(() => {
+    const box = document.querySelector('#btn-theme').getBoundingClientRect();
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+  })()`);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await until(() => cdp.run("!document.querySelector('#theme-pop').hidden"));
+  await key('Escape', 27);
+  await click('#btn-back');
+  await until(() => cdp.run("!document.querySelector('#view-library').hidden"));
+  await cdp.run(`window.fetch = ((fetch) => (path, ...args) => path === 'packs/index.json'
+    ? Promise.resolve(Response.json({ packs: [{ id:'test', titre:'Pack de test', source:'packs/test/', type:'dossier',
+        livres:[{fichier:'absent.epub'}] }] })) : fetch(path,...args))(window.fetch)`);
+  await click('#btn-packs');
+  assert.equal(await active(), 'packs-back');
+  await until(() => cdp.run("Boolean(document.querySelector('.pack-card'))"));
+  await click('.pack-card');
+  assert.equal(await active(), 'packs-back-list');
+  await key('Escape', 27);
+  assert.equal(await active(), 'pack-card');
+  await key('Escape', 27);
+  assert.equal(await active(), 'btn-packs');
+  assert.deepEqual(await cdp.run('window.__ncErrors'), []);
+  console.log('OK — réduction de hauteur simulée, tap émulé sur un thème et aller-retour clavier des packs.');
+}
+
 let cdp;
 let other;
 try {
@@ -500,6 +741,8 @@ try {
     await benchmark(cdp);
   } else if (migration) {
     await testMigration(cdp, port);
+  } else if (process.env.NC_UX === '1') {
+    await testUx(cdp);
   } else {
 
   assert.equal((await cdp.run(`(${rawCatalog})()`)).version, enableV8 ? 8 : 7);
@@ -624,7 +867,7 @@ try {
     await NC.library.refresh();
 
     const firstCard = document.querySelector('.card');
-    firstCard.focus();
+    firstCard.querySelector('.card-open').focus();
     check(getComputedStyle(firstCard.querySelector('.card-edit')).display === 'flex', 'Actions de carte au clavier');
     check(window.__ncErrors.length === 0, JSON.stringify(window.__ncErrors));
     return paper.id;

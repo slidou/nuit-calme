@@ -28,6 +28,8 @@ NC.packs = (() => {
      de toucher au DOM (retour en arrière pendant un chargement). */
   let packs = [];
   let openPackId = null;
+  let viewOpener;
+  let detailOpener;
   let session = null;
   let seqGen = 0;   // jeton global : une promesse en vol d'un pack précédent ne peut plus écrire
   let sigs = []; // signatures pliées de la bibliothèque, pour les doublons
@@ -66,9 +68,11 @@ NC.packs = (() => {
 
   /* ── Ouverture / fermeture de la vue ── */
   function openView() {
+    viewOpener = document.activeElement;
     $('#view-library').hidden = true;
     $('#view-packs').hidden = false;
     showList();
+    NC.focus($('#packs-back'));
     loadList();
   }
 
@@ -77,6 +81,7 @@ NC.packs = (() => {
     openPackId = null;
     $('#view-packs').hidden = true;
     $('#view-library').hidden = false;
+    NC.focus(viewOpener, $('#btn-packs'));
   }
 
   function showList() {
@@ -96,7 +101,8 @@ NC.packs = (() => {
     const note = $('#packs-note');
     const noteText = $('#packs-note-text');
     const retry = $('#packs-retry');
-    note.hidden = true;
+    note.hidden = false;
+    noteText.textContent = 'Chargement des packs…';
     retry.hidden = true;
     $('#packs-grid').innerHTML = '';
     let doc;
@@ -135,7 +141,7 @@ NC.packs = (() => {
     grid.innerHTML = '';
     note.hidden = packs.length > 0;
     if (!packs.length) {
-      noteText.textContent = 'Aucun pack pour l\u2019instant. Déposez un dossier ou une archive .zip dans packs/ et poussez : la liste se met à jour toute seule.';
+      noteText.textContent = 'Aucun pack de livres disponible pour le moment.';
       return;
     }
     for (const p of packs) {
@@ -177,16 +183,17 @@ NC.packs = (() => {
       body.appendChild(go);
 
       card.append(icon, body);
-      card.addEventListener('click', () => openDetail(p));
+      card.addEventListener('click', () => openDetail(p, card));
       card.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(p); }
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(p, card); }
       });
       grid.appendChild(card);
     }
   }
 
   /* ── Le détail d'un pack ── */
-  function openDetail(pack) {
+  function openDetail(pack, opener) {
+    detailOpener = opener;
     dropSession();
     openPackId = pack.id;
     sigs = NC.library.librarySignatures();
@@ -200,6 +207,7 @@ NC.packs = (() => {
     $('#pack-books').innerHTML = '';
     updateDetailSub();
     updateImportAllBtn();
+    NC.focus($('#packs-back-list'));
     if (pack.type === 'zip') loadZipPack(pack);
     else loadFolderPack(pack);
   }
@@ -207,6 +215,7 @@ NC.packs = (() => {
   function backToList() {
     openPackId = null;
     showList();
+    NC.focus(detailOpener, $('#packs-back'));
   }
 
   function updateDetailSub() {
@@ -487,9 +496,15 @@ NC.packs = (() => {
     const grid = $('#pack-books');
     const note = document.createElement('p');
     note.className = 'pack-detail-err';
+    note.setAttribute('role', 'status');
     note.textContent = msg;
     grid.appendChild(note);
-    updateImportAllBtn();
+    if (session?.entries.size) updateImportAllBtn();
+    else {
+      const button = $('#pack-import-all');
+      button.disabled = true;
+      button.textContent = 'Tout importer';
+    }
   }
 
   /* Carte de progression du téléchargement d'archive. */

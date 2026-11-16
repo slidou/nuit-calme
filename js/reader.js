@@ -47,6 +47,12 @@ NC.reader = (() => {
      en fantôme derrière la bibliothèque (fuite d'écouteurs). */
   let opening = false;
   let openGen = 0;
+  let handleReadingKey;
+  function setReaderLoading(loading) {
+    $('#stage').setAttribute('aria-busy', String(loading));
+    NC.$$('.reader-actions button:not(#btn-kbd), #nav-prev, #nav-next, #progress')
+      .forEach((button) => { button.disabled = loading; });
+  }
   async function open(bookId) {
     if (opening) return;
     opening = true;
@@ -73,11 +79,14 @@ NC.reader = (() => {
     // Vue
     $('#view-library').hidden = true;
     $('#view-reader').hidden = false;
+    setReaderLoading(true);
     $('#reader-book-title').textContent = rec.title;
     $('#reader-loc').textContent = 'Ouverture…';
     $('#progress').value = 0;
+    $('#progress').setAttribute('aria-valuetext', '0 %');
     $('#pct-label').textContent = '0 %';
     $('#pos-label').textContent = '…';
+    NC.focus($('#stage'));
 
     // Préférences
     const spread = await NC.db.getSetting('spread', window.innerWidth >= 1100 ? 'always' : 'none');
@@ -167,6 +176,7 @@ NC.reader = (() => {
        ce qui vient d'être créé au lieu de le laisser vivre en fantôme. */
     if (gen !== openGen) { try { newCtl.destroy(); } catch (e) {} return; }
     ctl = newCtl;
+    setReaderLoading(false);
     /* Vignettes (V2.18) : à l'ouverture, le tiroir d'un PDF s'affiche
        en sommaire si le livre en fournit un, sinon en vignettes. */
     pdfTocMode = (ctl.type === 'pdf' && ctl.toc && ctl.toc.length) ? 'toc' : 'thumbs';
@@ -251,10 +261,11 @@ NC.reader = (() => {
       pct = ctl.percent();
     }
 
-    $('#reader-loc').textContent = label;
+    if ($('#reader-loc').textContent !== label) $('#reader-loc').textContent = label;
     $('#pos-label').textContent = posTxt || '—';
     $('#progress').value = Math.round(pct * 1000);
     $('#pct-label').textContent = Math.round(pct * 100) + ' %';
+    $('#progress').setAttribute('aria-valuetext', $('#pct-label').textContent);
     markCurrentToc();
     /* Historique (n°9) : chaque position tenue laisse une trace.
        Marque-page (n°8) : l'état du bouton suit la position. */
@@ -319,6 +330,10 @@ NC.reader = (() => {
      remettent les barres. Le re-dessin suit la transition (les barres
      passent en absolu, le cadre du livre grandit). */
   function toggleChrome() {
+    if (focusMode) {
+      $('#view-reader').classList.toggle('focus-reveal');
+      return;
+    }
     chromeHidden = !chromeHidden;
     if (chromeHidden) document.body.dataset.chrome = 'off';
     else delete document.body.dataset.chrome;
@@ -329,19 +344,27 @@ NC.reader = (() => {
   }
 
   function showChrome() {
-    if (chromeHidden) toggleChrome();
+    if (focusMode) $('#view-reader').classList.add('focus-reveal');
+    else if (chromeHidden) toggleChrome();
   }
 
   /* ── Tourne-page théâtral ── */
   function flip(dir, action) {
     if (flipping) return;
+    const reader = ctl;
+    const turn = () => { if (ctl === reader) return action(); };
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      flipping = true;
+      Promise.resolve().then(turn).catch(console.error).finally(() => { flipping = false; });
+      return;
+    }
     const frame = $('#book-frame');
     const ov = document.createElement('div');
     ov.className = 'flip ' + (dir > 0 ? 'flip-next' : 'flip-prev');
     frame.appendChild(ov);
     flipping = true;
     // On change la page quand la feuille est à moitié soulevée
-    setTimeout(() => { try { action(); } catch (e) { console.error(e); } }, 300);
+    setTimeout(() => { Promise.resolve().then(turn).catch(console.error); }, 300);
     setTimeout(() => {
       ov.remove();
       flipping = false;
@@ -353,10 +376,30 @@ NC.reader = (() => {
   const goNext = () => { if (!ctl) return; hideTransient(); if (ctl.type === 'epub' && ctl.flow === 'scrolled') { ctl.next(); return; } flip(1, () => ctl.next()); };
   const goPrev = () => { if (!ctl) return; hideTransient(); if (ctl.type === 'epub' && ctl.flow === 'scrolled') { ctl.prev(); return; } flip(-1, () => ctl.prev()); };
 
+  function closeReadingPop(kind, restore = false) {
+    const pop = $(`#${kind}-pop`);
+    if (pop.hidden) return false;
+    pop.hidden = true;
+    const button = $(`#btn-${kind}`);
+    button.setAttribute('aria-expanded', 'false');
+    if (restore) NC.focus(button, $('#stage'));
+    return true;
+  }
+
+  function showReadingPop(kind) {
+    const pop = $(`#${kind}-pop`);
+    const button = $(`#btn-${kind}`);
+    const anchor = button.getBoundingClientRect();
+    pop.hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+    NC.placePopover(pop, anchor);
+    NC.focus(pop.querySelector('[aria-pressed="true"]'), pop.querySelector('button'));
+  }
+
   function hideTransient() {
-    $('#sel-popup').hidden = true;
-    $('#font-pop').hidden = true;
-    $('#theme-pop').hidden = true;
+    if (!$('#sel-popup').hidden && ctl) ctl.hideSelPopup();
+    closeReadingPop('font');
+    closeReadingPop('theme');
   }
 
   /* ── Saut direct via la barre de progression ──
@@ -382,8 +425,6 @@ NC.reader = (() => {
     drawerKind = kind;
     const body = $('#drawer-body');
     body.innerHTML = '';
-    $('#drawer').hidden = false;
-    $('#drawer-backdrop').hidden = false;
     /* Export des citations (n°11) : le bouton n'existe que dans le
        tiroir Soulignages & notes — renderNotes le retire encore s'il
        n'y a rien à exporter. */
@@ -393,13 +434,22 @@ NC.reader = (() => {
     if (kind === 'notes') { $('#drawer-title').textContent = 'Soulignages & notes'; renderNotes(body); }
     if (kind === 'history') { $('#drawer-title').textContent = 'Passages'; renderHistory(body); }
     if (kind === 'stats') { $('#drawer-title').textContent = 'Statistiques'; renderStats(body); }
+    NC.modal.show($('#drawer'), {
+      backdrop: $('#drawer-backdrop'), initial: kind === 'search' ? body.querySelector('input') : $('#drawer-close'),
+      dismiss: () => {
+        if (noteDraft) closeNoteEditor();
+        else if (catPopId) closeCatPop(true);
+        else closeDrawer();
+      },
+      fallback: () => $('#stage'), extras: [$('#cat-pop'), $('#note-pop')],
+    });
   }
 
   function closeDrawer() {
     searchAbort?.abort();
     drawerKind = null;
-    $('#drawer').hidden = true;
-    $('#drawer-backdrop').hidden = true;
+    closeCatPop();
+    NC.modal.hide($('#drawer'));
     $('#drawer-export').hidden = true;
   }
 
@@ -415,10 +465,13 @@ NC.reader = (() => {
     const pop = $('#kbd-pop');
     if (!pop.hidden) return;
     pop.hidden = false;
-    try { pop.focus(); } catch (e) {}
+    NC.focus($('#kbd-close'));
   }
-  function closeKbdPop() {
-    $('#kbd-pop').hidden = true;
+  function closeKbdPop(restore = false) {
+    const pop = $('#kbd-pop');
+    if (pop.hidden) return;
+    pop.hidden = true;
+    if (restore) NC.focus($('#btn-kbd'), $('#stage'));
   }
   function toggleKbdPop() {
     if ($('#kbd-pop').hidden) openKbdPop();
@@ -1171,9 +1224,13 @@ NC.reader = (() => {
     row.append(input, btn);
     const status = document.createElement('p');
     status.className = 'search-status';
+    status.setAttribute('aria-hidden', 'true');
+    const announcement = document.createElement('p');
+    announcement.className = 'sr-only';
+    announcement.setAttribute('role', 'status');
     const list = document.createElement('ul');
     list.className = 'res-list';
-    body.append(row, status, list);
+    body.append(row, status, announcement, list);
 
     let running = false;
     async function run() {
@@ -1186,6 +1243,7 @@ NC.reader = (() => {
       searchAbort = controller;
       list.innerHTML = '';
       status.textContent = 'Recherche en cours…';
+      announcement.textContent = status.textContent;
       try {
         const results = await reader.search(q, (done, total) => {
           status.textContent = `Recherche… ${Math.round((done / Math.max(1, total)) * 100)} %`;
@@ -1194,6 +1252,7 @@ NC.reader = (() => {
         status.textContent = results.length
           ? `${results.length} passage${results.length > 1 ? 's' : ''} trouvé${results.length > 1 ? 's' : ''}.`
           : 'Aucun résultat dans ce livre.';
+        announcement.textContent = status.textContent;
         for (const r of results) {
           const li = document.createElement('li');
           const b = document.createElement('button');
@@ -1222,6 +1281,7 @@ NC.reader = (() => {
         if (controller.signal.aborted) return;
         console.error(e);
         status.textContent = 'La recherche a échoué sur ce livre.';
+        announcement.textContent = status.textContent;
       } finally {
         if (searchAbort === controller) searchAbort = null;
         running = false;
@@ -1229,7 +1289,6 @@ NC.reader = (() => {
     }
     btn.addEventListener('click', run);
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
-    setTimeout(() => input.focus(), 60);
   }
 
   /* ── Soulignages & notes ── */
@@ -1243,8 +1302,11 @@ NC.reader = (() => {
     !!(notesFilter.q.trim() || notesFilter.type !== 'all' || notesFilter.cat !== 'all');
 
   async function renderNotes(body) {
+    const id = current?.id;
+    if (id === undefined) return;
     body.innerHTML = ''; // le tiroir peut être déjà peuplé (suppression → re-rendu)
-    const anns = await NC.db.annotationsFor(current.id);
+    const anns = await NC.db.annotationsFor(id);
+    if (current?.id !== id || drawerKind !== 'notes') return;
     if (!anns.length) {
       $('#drawer-export').hidden = true; // rien à exporter (n°11)
       body.innerHTML = '<p class="drawer-empty">Aucun soulignage ni note pour l\'instant.<br>Sélectionnez du texte dans le livre, puis « Souligner » ou « Note ».</p>';
@@ -1453,9 +1515,11 @@ NC.reader = (() => {
      instance (#cat-pop dans index.html), repositionnée sous le bouton
      cliqué ; au-dessus si le bas débordait de l'écran. */
   let catPopId = null;
+  let catPopOpener;
   function openCatPop(ann, btn) {
     const pop = $('#cat-pop');
     catPopId = ann.id;
+    catPopOpener = btn;
     pop.innerHTML = '';
     const h = document.createElement('h4');
     h.textContent = 'Catégorie';
@@ -1467,7 +1531,7 @@ NC.reader = (() => {
       b.className = 'cat-opt' + ((ann.category || '') === c.key ? ' current' : '');
       b.textContent = c.label;
       b.addEventListener('click', async () => {
-        closeCatPop();
+        closeCatPop(true);
         if ((ann.category || '') === c.key) return;
         try { await ctl.setAnnotationCategory(ann, c.key); }
         catch (e) { console.error(e); NC.toast('La catégorie n\'a pas pu être enregistrée.', 'error'); }
@@ -1475,21 +1539,18 @@ NC.reader = (() => {
       });
       pop.appendChild(b);
     }
-    $('#font-pop').hidden = true;
-    $('#theme-pop').hidden = true;
+    closeReadingPop('font');
+    closeReadingPop('theme');
     pop.hidden = false;
-    const r = btn.getBoundingClientRect();
-    const pw = pop.offsetWidth, ph = pop.offsetHeight;
-    const left = Math.max(10, Math.min(r.left, window.innerWidth - pw - 10));
-    let top = r.bottom + 6;
-    if (top + ph > window.innerHeight - 10) top = Math.max(10, r.top - ph - 6);
-    pop.style.left = left + 'px';
-    pop.style.top = top + 'px';
+    NC.placePopover(pop, btn.getBoundingClientRect());
+    NC.focus(pop.querySelector('.current'), pop.querySelector('button'));
   }
-  function closeCatPop() {
+  function closeCatPop(restore = false) {
     catPopId = null;
     const pop = $('#cat-pop');
     if (pop) pop.hidden = true;
+    if (restore) NC.focus(catPopOpener, $('#drawer-close'));
+    catPopOpener = null;
   }
 
   /* ── Export des citations (n°11) ─────────────────────────────
@@ -1670,7 +1731,9 @@ NC.reader = (() => {
 
   async function openExportPop() {
     if (!ctl || !current) return;
-    const anns = await NC.db.annotationsFor(current.id);
+    const id = current.id;
+    const anns = await NC.db.annotationsFor(id);
+    if (current?.id !== id || drawerKind !== 'notes') return;
     if (!anns.length) {
       NC.toast('Aucune citation à exporter — soulignez d\'abord un passage du livre.', 'info');
       return;
@@ -1683,13 +1746,12 @@ NC.reader = (() => {
       + (nNotes ? ' · ' + nNotes + ' note' + (nNotes > 1 ? 's' : '') : '');
     renderExportPreview();
     hideTransient();
-    $('#export-backdrop').hidden = false;
-    $('#export-pop').hidden = false;
+    NC.modal.show($('#export-pop'), { backdrop: $('#export-backdrop'),
+      initial: $('#export-cancel'), dismiss: closeExportPop, fallback: () => $('#drawer-close') });
   }
 
   function closeExportPop() {
-    $('#export-backdrop').hidden = true;
-    $('#export-pop').hidden = true;
+    NC.modal.hide($('#export-pop'));
   }
 
   function downloadExport(fmt) {
@@ -1709,6 +1771,7 @@ NC.reader = (() => {
      popup ne peut plus perdre la localisation. noteDraft = { cap }
      (création) ou { ann } (édition d'une note existante). */
   let noteDraft = null;
+  let noteOpener;
 
   function openNoteEditor(draft) {
     noteDraft = draft || null;
@@ -1716,21 +1779,24 @@ NC.reader = (() => {
     const pop = $('#note-pop');
     const q = $('#note-pop-quote');
     const ta = $('#note-pop-text');
+    noteOpener = document.activeElement;
     const quote = noteDraft.ann ? String(noteDraft.ann.text || '') : String((noteDraft.cap && noteDraft.cap.text) || '');
     q.hidden = !quote;
     q.textContent = quote.length > 240 ? quote.slice(0, 240) + '…' : quote;
     ta.value = noteDraft.ann ? String(noteDraft.ann.note || '') : '';
-    $('#font-pop').hidden = true;
-    $('#theme-pop').hidden = true;
+    closeReadingPop('font');
+    closeReadingPop('theme');
     pop.hidden = false;
-    setTimeout(() => {
-      try { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e) {}
-    }, 60);
+    NC.focus(ta);
+    ta.setSelectionRange(ta.value.length, ta.value.length);
   }
 
   function closeNoteEditor() {
+    if (!noteDraft) return;
     noteDraft = null;
     $('#note-pop').hidden = true;
+    NC.focus(noteOpener, $('#drawer-close'), $('#stage'));
+    noteOpener = null;
   }
 
   let noteSaving = false; // anti-réentrance : Ctrl+Entrée est vu par DEUX
@@ -1752,7 +1818,10 @@ NC.reader = (() => {
         return;
       }
       closeNoteEditor();
-      if (drawerKind === 'notes') renderNotes($('#drawer-body'));
+      if (drawerKind === 'notes') {
+        NC.focus($('#drawer-close'));
+        renderNotes($('#drawer-body'));
+      }
     } finally {
       noteSaving = false;
     }
@@ -1761,9 +1830,8 @@ NC.reader = (() => {
   /* ── Taille du texte / zoom ── */
   function toggleFontPop() {
     if (!ctl) return; // bouton visible pendant une ouverture : pas encore de contrôleur
-    const pop = $('#font-pop');
-    if (!pop.hidden) { pop.hidden = true; return; }
-    $('#theme-pop').hidden = true; // un seul popover ouvert à la fois
+    if (closeReadingPop('font', true)) return;
+    closeReadingPop('theme');
     const body = $('#font-pop-body');
     body.innerHTML = '';
     if (ctl.type === 'epub') {
@@ -1773,11 +1841,13 @@ NC.reader = (() => {
       row.className = 'font-row';
       const minus = document.createElement('button');
       minus.className = 'font-btn'; minus.type = 'button'; minus.textContent = 'A−';
+      minus.setAttribute('aria-label', 'Réduire la taille du texte');
       minus.title = 'Réduire le texte';
       const val = document.createElement('div');
       val.className = 'font-val'; val.textContent = ctl.fontSize + ' %';
       const plus = document.createElement('button');
       plus.className = 'font-btn'; plus.type = 'button'; plus.textContent = 'A+';
+      plus.setAttribute('aria-label', 'Augmenter la taille du texte');
       plus.title = 'Agrandir le texte';
       const update = (v) => { val.textContent = v + ' %'; };
       minus.addEventListener('click', () => update(ctl.setFontSize(ctl.fontSize - 10)));
@@ -1838,10 +1908,12 @@ NC.reader = (() => {
       row.className = 'font-row';
       const minus = document.createElement('button');
       minus.className = 'font-btn'; minus.type = 'button'; minus.textContent = '−';
+      minus.setAttribute('aria-label', 'Réduire le zoom');
       const val = document.createElement('div');
       val.className = 'font-val'; val.textContent = Math.round(ctl.zoom * 100) + ' %';
       const plus = document.createElement('button');
       plus.className = 'font-btn'; plus.type = 'button'; plus.textContent = '+';
+      plus.setAttribute('aria-label', 'Augmenter le zoom');
       const update = (v) => { val.textContent = Math.round(v * 100) + ' %'; };
       minus.addEventListener('click', () => ctl.setZoom(ctl.zoom - 0.15).then(update));
       plus.addEventListener('click', () => ctl.setZoom(ctl.zoom + 0.15).then(update));
@@ -1859,6 +1931,7 @@ NC.reader = (() => {
       for (const [key, label] of [['page', 'Page entière'], ['width', 'Largeur'], ['height', 'Hauteur']]) {
         const b = document.createElement('button');
         b.className = 'typo-opt' + (ctl.fit === key ? ' current' : '');
+        b.setAttribute('aria-pressed', String(ctl.fit === key));
         b.type = 'button';
         b.textContent = label;
         b.title = key === 'page' ? 'Ajuster la page entière dans le cadre'
@@ -1867,17 +1940,18 @@ NC.reader = (() => {
         b.addEventListener('click', async () => {
           try { await ctl.setFit(key); } catch (e) { console.error(e); return; }
           update(ctl.zoom);
-          fitChips.forEach(([k, el]) => el.classList.toggle('current', k === ctl.fit));
+          fitChips.forEach(([k, el]) => {
+            el.classList.toggle('current', k === ctl.fit);
+            el.setAttribute('aria-pressed', String(k === ctl.fit));
+          });
         });
         fitChips.push([key, b]);
         gF.appendChild(b);
       }
       body.append(hF, gF);
     }
-    const btnRect = $('#btn-font').getBoundingClientRect();
-    pop.hidden = false;
-    pop.style.left = Math.min(window.innerWidth - pop.offsetWidth - 14, btnRect.left) + 'px';
-    pop.style.top = (btnRect.bottom + 10) + 'px';
+    showReadingPop('font');
+    markTypoChips();
   }
 
   /* État visuel des pastilles de typographie (n°2) : la valeur courante
@@ -1887,9 +1961,12 @@ NC.reader = (() => {
     const t = ctl.typo || NC.TYPO_DEFAULT;
     const root = $('#font-pop-body');
     if (!root) return;
-    NC.$$('[data-typo-font]', root).forEach((b) => b.classList.toggle('current', b.dataset.typoFont === t.font));
-    NC.$$('[data-typo-lh]', root).forEach((b) => b.classList.toggle('current', parseFloat(b.dataset.typoLh) === t.lineHeight));
-    NC.$$('[data-typo-just]', root).forEach((b) => b.classList.toggle('current', b.dataset.typoJust === t.justify));
+    NC.$$('.typo-opt', root).forEach((button) => {
+      const active = button.dataset.typoFont === t.font || Number(button.dataset.typoLh) === t.lineHeight ||
+        button.dataset.typoJust === t.justify;
+      button.classList.toggle('current', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
   }
 
   /* Choix de typographie (n°2) : application immédiate (ctl.setTypo),
@@ -1919,6 +1996,7 @@ NC.reader = (() => {
 
   function updateSpreadBtn() {
     $('#btn-spread').classList.toggle('active', ctl && ctl.spread === 'always');
+    $('#btn-spread').setAttribute('aria-pressed', String(ctl?.spread === 'always' && ctl.flow !== 'scrolled'));
     $('#btn-spread').title = ctl && ctl.spread === 'always' ? 'Passer en vue simple page' : 'Passer en vue double page';
   }
 
@@ -1981,9 +2059,8 @@ NC.reader = (() => {
 
   /* Popover de choix du thème (même mécanique que le popover de police) */
   function toggleThemePop() {
-    const pop = $('#theme-pop');
-    if (!pop.hidden) { pop.hidden = true; return; }
-    $('#font-pop').hidden = true; // un seul popover ouvert à la fois
+    if (closeReadingPop('theme', true)) return;
+    closeReadingPop('font');
     const body = $('#theme-pop-body');
     body.innerHTML = '';
     const h = document.createElement('h4');
@@ -2001,13 +2078,10 @@ NC.reader = (() => {
       const lbl = document.createElement('span');
       lbl.textContent = meta.label;
       b.append(sw, lbl);
-      b.addEventListener('click', () => { pop.hidden = true; chooseTheme(key); });
+      b.addEventListener('click', () => { closeReadingPop('theme', true); chooseTheme(key); });
       body.appendChild(b);
     }
-    const btnRect = $('#btn-theme').getBoundingClientRect();
-    pop.hidden = false;
-    pop.style.left = Math.min(window.innerWidth - pop.offsetWidth - 14, btnRect.left) + 'px';
-    pop.style.top = (btnRect.bottom + 10) + 'px';
+    showReadingPop('theme');
   }
 
   /* N°19 : J fait tourner les thèmes du livre (même liste que le
@@ -2082,6 +2156,7 @@ NC.reader = (() => {
 
   /* ── Fermeture ── */
   async function close(silent) {
+    const bookId = current?.id;
     openGen++; // toute ouverture encore en vol devient périmée
     endVisit(); // clôture le passage en cours (s'il a assez vécu) — n°9
     stopStatsTracking(); // arrête le chronomètre et écrit le reliquat — V2.12
@@ -2094,6 +2169,7 @@ NC.reader = (() => {
     bookmarkCache = [];
     closeCatPop();   // popover de catégorie ouvert depuis le tiroir (V2.26)
     closeKbdPop();   // mémo des raccourcis : panneau sans voile, cliquable derrière (V2.26)
+    closeExportPop();
     updateBookmarkBtn(); // le bouton retombe (état neutre) même sans livre
     closeDrawer();
     closeNoteEditor();
@@ -2113,6 +2189,7 @@ NC.reader = (() => {
     $('#view-reader').hidden = true;
     $('#view-library').hidden = false;
     if (!silent) await NC.library.refresh();
+    if (bookId !== undefined) NC.library.focusBook(bookId);
   }
 
   /* ── Câblage ── */
@@ -2163,13 +2240,16 @@ NC.reader = (() => {
     $('#btn-history').addEventListener('click', () => drawerKind === 'history' ? closeDrawer() : openDrawer('history'));
     $('#btn-stats').addEventListener('click', () => drawerKind === 'stats' ? closeDrawer() : openDrawer('stats'));
     $('#btn-kbd').addEventListener('click', toggleKbdPop); // mémo des raccourcis (n°19)
+    $('#kbd-close').addEventListener('click', () => closeKbdPop(true));
 
     // Barre de progression : aperçu du pourcentage en glissant, saut au relâchement
     const bar = $('#progress');
     bar.addEventListener('pointerdown', () => { draggingBar = true; });
     window.addEventListener('pointerup', () => { draggingBar = false; });
+    window.addEventListener('pointercancel', () => { draggingBar = false; });
     bar.addEventListener('input', () => {
       $('#pct-label').textContent = Math.round(bar.value / 10) + ' %';
+      bar.setAttribute('aria-valuetext', $('#pct-label').textContent);
     });
     bar.addEventListener('change', () => { seekTo(bar.value / 1000); });
 
@@ -2227,34 +2307,23 @@ NC.reader = (() => {
     });
     $('#note-cancel').addEventListener('click', closeNoteEditor);
     $('#note-save').addEventListener('click', saveNote);
-    $('#note-pop-text').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveNote(); }
-    });
-
     // clic ailleurs → fermer menus
     document.addEventListener('click', (e) => {
       if (!e.target.closest('#sel-popup')) {
         if (!$('#sel-popup').hidden && ctl && ctl._pendingSel) ctl.hideSelPopup();
       }
-      if (!e.target.closest('#font-pop') && !e.target.closest('#btn-font')) $('#font-pop').hidden = true;
-      if (!e.target.closest('#theme-pop') && !e.target.closest('#btn-theme')) $('#theme-pop').hidden = true;
+      if (!e.target.closest('#font-pop, #btn-font')) closeReadingPop('font');
+      if (!e.target.closest('#theme-pop, #btn-theme')) closeReadingPop('theme');
       if (!e.target.closest('#cat-pop') && !e.target.closest('.note-cat-btn')) closeCatPop();
     });
-
-    // Après un clic sur un outil, le focus retourne au document :
-    // Espace/Entrée ne relancent pas l'outil, et les flèches tournent
-    // bien la page (sinon, le bouton restait « armé »).
-    const toolBlur = (e) => { const b = e.currentTarget; if (b && typeof b.blur === 'function') b.blur(); };
-    ['#btn-back', '#btn-toc', '#btn-search', '#btn-notes', '#btn-spread', '#btn-flow', '#btn-theme', '#btn-focus', '#btn-capture', '#btn-font', '#btn-fullscreen', '#sel-highlight', '#sel-note', '#sel-copy', '#btn-bookmark', '#btn-history', '#btn-stats', '#btn-kbd']
-      .forEach((sel) => { const b = $(sel); if (b) b.addEventListener('click', toolBlur); });
 
     // clavier — les flèches/espace tournent la page SAUF quand le focus est
     // dans un champ ou sur un bouton (sinon, cliquer un outil puis appuyer
     // sur Espace relancerait la lecture au lieu d'activer le bouton).
     // closest() et pas matches() : le SVG ou le tracé DANS un bouton
     // ne doit pas compter comme « hors outil ».
-    document.addEventListener('keydown', (e) => {
-      if ($('#view-reader').hidden) return;
+    handleReadingKey = (e, fromContent = false) => {
+      if ($('#view-reader').hidden || e.defaultPrevented || e.isComposing) return;
       // e.target peut être document (événements synthétiques) : closest
       // n'existe alors pas — on ne traite que les cibles éléments
       const tgt = e.target;
@@ -2271,22 +2340,28 @@ NC.reader = (() => {
       /* Export des citations (n°11) : panneau modal — tant qu'il est
          affiché, Échap le referme et aucune autre touche n'agit
          derrière lui (le livre ne tourne pas de page). */
-      if (!$('#export-pop').hidden) {
-        if (e.key === 'Escape') { e.preventDefault(); closeExportPop(); }
-        return;
-      }
+      if (!$('#export-pop').hidden || drawerKind) return;
       /* Mémo des raccourcis (n°19) : panneau modal — tant qu'il est
          affiché, Échap ou « ? » le referme et aucune autre touche ne
          doit agir derrière lui. */
       if (!$('#kbd-pop').hidden) {
-        if (e.key === 'Escape' || e.key === '?') { e.preventDefault(); closeKbdPop(); }
+        if (e.key === 'Escape' || (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey)) {
+          e.preventDefault(); closeKbdPop(true);
+        }
         return;
       }
       if (e.key === 'Escape') {
-        if (catPopId) { closeCatPop(); return; } // Échap ferme d'abord le popover de catégorie
-        closeDrawer(); hideTransient(); if (focusMode) applyFocus(false); return;
+        if (closeReadingPop('font', true) || closeReadingPop('theme', true)) return;
+        hideTransient();
+        if (focusMode) applyFocus(false);
+        else if (chromeHidden) showChrome();
+        return;
       }
       if (inField) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!fromContent && !tgt?.closest?.('#stage')) return;
+      const selection = fromContent && tgt?.ownerDocument?.getSelection();
+      if (selection && !selection.isCollapsed) return;
       /* Le mémo s'ouvre même pendant qu'un livre charge (il ne touche
          pas au contrôleur) — mais jamais depuis un champ de saisie. */
       if (e.key === '?') { e.preventDefault(); openKbdPop(); return; }
@@ -2297,7 +2372,6 @@ NC.reader = (() => {
       /* N°19 : jamais de lettre avec Ctrl/Cmd/Alt — Ctrl+S, Cmd+P,
          Alt+… restent des raccourcis du navigateur. (Échap et « ? »
          passent avant, sans modificateur utiles.) */
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === 'f' || e.key === 'F') { e.preventDefault(); toggleFocus(); return; }
       /* Signet (n°8) : la touche B bascule le marque-page, comme le
          bouton — la main reste sur le clavier en train de lire. */
@@ -2322,6 +2396,7 @@ NC.reader = (() => {
       if (e.key === 'a' || e.key === 'A') { e.preventDefault(); toggleFontPop(); return; }
       if (e.key === 'p' || e.key === 'P') { e.preventDefault(); toggleFullscreen(); return; }
       if (e.key === 'c' || e.key === 'C') { e.preventDefault(); capture(); return; }
+      if (e.shiftKey) return;
       if (e.key === 'Home') { e.preventDefault(); seekTo(0); return; }
       if (e.key === 'End') { e.preventDefault(); seekTo(1); return; }
       /* Défilement vertical (n°3) : ↓ / Page↓ / Espace avancent d'un
@@ -2341,7 +2416,8 @@ NC.reader = (() => {
         if (scrolledEpub && ctl.scrollPage(-1)) return;
         goPrev();
       }
-    });
+    };
+    document.addEventListener('keydown', handleReadingKey);
 
     // Mode concentration : la souris effleure le haut/bas de l'écran →
     // les barres réapparaissent le temps du réglage, puis se reforment.
@@ -2412,6 +2488,8 @@ NC.reader = (() => {
 
   return {
     init, open, close, goNext, goPrev,
+    onContentKey: (event) => handleReadingKey?.(event, true),
+    closeReadingPop,
     toggleChrome, showChrome, // mode immersion (V2.17, tap central du tactile)
     _state: () => ({ ctl, current }),
     /* Crochets de test / diagnostic (V2.12) : état du suivi, seuil

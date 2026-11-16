@@ -14,7 +14,7 @@
 
 const SCOPE = self.registration.scope;
 const CACHE_PREFIX = `nuit-calme:${SCOPE}:`;
-const CACHE = CACHE_PREFIX + 'v2.27-3';
+const CACHE = CACHE_PREFIX + 'v2.27-4';
 
 const PRECACHE = [
   './',

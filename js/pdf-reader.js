@@ -119,8 +119,8 @@ NC.openPdf = async function (rec, opts) {
     stage.appendChild(lanes);
 
     const frame = NC.$('#book-frame');
-    const availW = frame.clientWidth - 68;
-    const availH = frame.clientHeight - 52;
+    const availW = Math.max(1, frame.clientWidth - Math.min(68, frame.clientWidth * .10));
+    const availH = Math.max(1, frame.clientHeight - Math.min(52, frame.clientHeight * .12));
     const pages = isDouble()
       ? [ctl.page, ctl.page + 1].filter((p) => p >= 1 && p <= doc.numPages)
       : [ctl.page];
@@ -460,18 +460,10 @@ NC.openPdf = async function (rec, opts) {
        pastille effondre la sélection (elle vit dans le document
        principal) — impossible de la relire au moment du clic. */
     ctl._pendingSel = { text, parts: captureSelectionParts(sel) };
-    let x = window.innerWidth / 2, y = 140;
-    try {
-      const rect = sel.getRangeAt(0).getBoundingClientRect();
-      if (rect) { x = rect.left + rect.width / 2; y = rect.top; }
-    } catch (e) {}
+    const rect = sel.rangeCount ? sel.getRangeAt(0).getBoundingClientRect() : stage.getBoundingClientRect();
     const pop = NC.$('#sel-popup');
     pop.hidden = false;
-    const pw = pop.offsetWidth || 190;
-    x = Math.max(12, Math.min(window.innerWidth - pw - 12, x - pw / 2));
-    y = Math.max(60, y - 48);
-    pop.style.left = x + 'px';
-    pop.style.top = y + 'px';
+    NC.placePopover(pop, rect, { center: true, above: true });
   }
 
   ctl.hideSelPopup = () => {
@@ -769,7 +761,7 @@ NC.openPdf = async function (rec, opts) {
   };
 
   /* ── Progression ── */
-  ctl.percent = () => Math.max(0, Math.min(1, (ctl.page - 0.5) / Math.max(1, doc.numPages)));
+  ctl.percent = () => doc.numPages === 1 ? 1 : Math.max(0, Math.min(1, (ctl.page - 1) / (doc.numPages - 1)));
   ctl.seekPercent = async (p) => {
     ctl.page = Math.max(1, Math.min(doc.numPages, Math.round(p * (doc.numPages - 1)) + 1));
     await render();
