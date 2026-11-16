@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { testNotebook } from './notebook.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const browser = process.env.NC_BROWSER || (process.platform === 'win32'
@@ -743,6 +744,8 @@ try {
     await testMigration(cdp, port);
   } else if (process.env.NC_UX === '1') {
     await testUx(cdp);
+  } else if (process.env.NC_NOTEBOOK === '1') {
+    await testNotebook({ cdp, port, url, openTab, until, makeBooks });
   } else {
 
   assert.equal((await cdp.run(`(${rawCatalog})()`)).version, enableV8 ? 8 : 7);

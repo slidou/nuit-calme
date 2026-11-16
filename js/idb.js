@@ -16,7 +16,12 @@ NC.db = (() => {
     'readstats', 'progress', 'prefs', 'bookmeta', 'groups', 'settings'];
   const BACKUP_TIMESTAMPS = { progress: 'lastOpened', prefs: 'updatedAt', bookmeta: 'updatedAt' };
   const catalogChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel(NAME) : null;
-  const catalogChanged = () => catalogChannel?.postMessage('catalog');
+  const notebookEvents = new EventTarget();
+  const announceNotebook = (detail) => notebookEvents.dispatchEvent(new CustomEvent('change', { detail }));
+  function catalogChanged(detail) {
+    if (detail) announceNotebook(detail);
+    catalogChannel?.postMessage(detail ? { catalog: true, notebook: detail } : 'catalog');
+  }
   let dbPromise = null;
   let catalogBuild = null;
 
@@ -163,7 +168,7 @@ NC.db = (() => {
         const request = store.get(id);
         request.onsuccess = () => {
           try {
-            result = change(request.result);
+            result = change(request.result, store);
             if (result && result !== request.result) store.put(result);
           } catch (error) {
             failure = error;
@@ -214,15 +219,16 @@ NC.db = (() => {
     }));
   }
 
-  function notifyCatalog(promise) {
+  function notifyCatalog(promise, notebookChange) {
     return promise.then((result) => {
-      catalogChanged();
+      catalogChanged(notebookChange?.(result));
       return result;
     });
   }
 
   function notifyReader(promise, bookId) {
     return promise.then((result) => {
+      announceNotebook({});
       catalogChannel?.postMessage({ bookId });
       return result;
     });
@@ -232,6 +238,18 @@ NC.db = (() => {
   const withCards = (db, stores) => hasCatalog(db) ? [...stores, CARDS] : stores;
   const cardOf = ({ id, title, author, type, cover, size, addedAt, lastOpened }) =>
     ({ id, title, author, type, cover, size, addedAt, lastOpened });
+  const notebookBook = ({ id, title, author, type }) => ({ id, title, author, type });
+
+  function removeNotebookRow(store, expected) {
+    return notifyReader(update(store, expected.id, (row, records) => {
+      if (!row) return;
+      if (JSON.stringify(row) !== JSON.stringify(expected)) {
+        throw new DOMException('Cette entrée a changé depuis son ouverture.', 'InvalidStateError');
+      }
+      records.delete(expected.id);
+      return row;
+    }), expected.bookId);
+  }
 
   function putBookRow(transaction, book) {
     transaction.objectStore('books').put(book);
@@ -364,11 +382,27 @@ NC.db = (() => {
 
   return {
     onCatalogChange: (listener) => catalogChannel?.addEventListener('message', (event) => {
-      if (event.data === 'catalog') listener();
+      if (event.data === 'catalog' || event.data?.catalog === true) listener();
     }),
     onReaderChange: (listener) => catalogChannel?.addEventListener('message', (event) => {
-      if (event.data?.bookId !== undefined) listener(event.data.bookId);
+      if (event.data?.notebook?.restored) listener(null);
+      else if (event.data?.bookId !== undefined) listener(event.data.bookId);
     }),
+    onNotebookChange: (listener) => {
+      notebookEvents.addEventListener('change', (event) => listener(event.detail));
+      catalogChannel?.addEventListener('message', ({ data }) => {
+        if (data?.notebook || data?.bookId !== undefined) listener(data.notebook || {});
+      });
+    },
+    notebookSnapshot: () => open().then((db) => new Promise((resolve, reject) => {
+      const transaction = db.transaction(['books', 'annotations', 'bookmarks']);
+      const books = transaction.objectStore('books').getAllKeys();
+      const annotations = transaction.objectStore('annotations').getAll();
+      const bookmarks = transaction.objectStore('bookmarks').getAll();
+      transaction.oncomplete = () => resolve({ bookIds: books.result, annotations: annotations.result,
+        bookmarks: bookmarks.result });
+      transaction.onabort = () => reject(transaction.error || new Error('Lecture du carnet annulée'));
+    })),
     catalogSnapshot: () => open().then(readCatalog),
     backupSnapshot: () => open().then((db) => new Promise((resolve, reject) => {
       const t = db.transaction(BACKUP_STORES, 'readonly');
@@ -386,12 +420,16 @@ NC.db = (() => {
       if (resetCatalog) stores.push(CATALOG_STATE);
       const t = db.transaction(stores, 'readwrite');
       const counts = { booksAdded: 0, booksKept: 0 };
-      t.oncomplete = () => { catalogChanged(); resolve(counts); };
+      const changedBooks = [];
+      t.oncomplete = () => { catalogChanged({ books: changedBooks, restored: true, replace }); resolve(counts); };
       t.onabort = () => reject(t.error || new Error('Restauration annulée'));
 
       function write(store, row, count) {
         try {
-          if (store.name === 'books') putBookRow(t, row);
+          if (store.name === 'books') {
+            putBookRow(t, row);
+            changedBooks.push(notebookBook(row));
+          }
           else store.put(row);
           if (count) counts[count]++;
         } catch (err) {
@@ -413,7 +451,10 @@ NC.db = (() => {
           if (replace) store.clear();
           for (const row of state[name]) {
             if (replace) {
-              if (name === 'books') putBookRow(t, row);
+              if (name === 'books') {
+                putBookRow(t, row);
+                changedBooks.push(notebookBook(row));
+              }
               else store.put(row);
               counts[count]++;
               continue;
@@ -438,7 +479,8 @@ NC.db = (() => {
     countBooks: () => reqToPromise('books', 'readonly', (s) => s.count()),
     allBooks: () => reqToPromise('books', 'readonly', (s) => s.getAll()),
     getBook: (id) => reqToPromise('books', 'readonly', (s) => s.get(id)),
-    putBook: (book) => notifyCatalog(writeBooks((t) => putBookRow(t, book))),
+    putBook: (book) => notifyCatalog(writeBooks((t) => putBookRow(t, book)),
+      () => ({ books: [notebookBook(book)] })),
     patchBook: (id, fields) => notifyCatalog(writeBooks((t, apply) => {
       const request = t.objectStore('books').get(id);
       request.onsuccess = () => apply(() => {
@@ -447,8 +489,8 @@ NC.db = (() => {
         putBookRow(t, book);
         return book;
       });
-    })),
-    deleteBook: (id) => notifyCatalog(writeBooks((t) => deleteBookRow(t, id))),
+    }), (book) => book && ({ books: [notebookBook(book)] })),
+    deleteBook: (id) => notifyCatalog(writeBooks((t) => deleteBookRow(t, id)), () => ({ deleted: id })),
     /* Suppression transactionnelle du livre ET de toutes ses données
        associées (annotations, progression, signets, historique,
        statistiques) : plus aucune donnée orpheline qui s'accumule
@@ -485,7 +527,7 @@ NC.db = (() => {
         if (c) { c.delete(); c.continue(); }
       };
       t.oncomplete = () => {
-        catalogChanged();
+        catalogChanged({ deleted: id });
         catalogChannel?.postMessage({ bookId: id });
         resolve();
       };
@@ -502,9 +544,15 @@ NC.db = (() => {
         .sort((a, b) => a.createdAt - b.createdAt)),
     putAnnotation: (a) => notifyReader(saveForBook('annotations', [a], a.bookId), a.bookId),
     putAnnotations: (bookId, rows) => notifyReader(saveForBook('annotations', rows, bookId), bookId),
-    patchAnnotation: (id, fields, bookId) => notifyReader(
-      update('annotations', id, (row) => row && { ...row, ...fields }), bookId),
-    deleteAnnotation: (id, bookId) => notifyReader(tx('annotations', 'readwrite', (s) => s.delete(id)), bookId),
+    patchAnnotation: (id, fields, bookId, expectation) => notifyReader(update('annotations', id, (row) => {
+      if (!row || (bookId !== undefined && row.bookId !== bookId)) return;
+      if (expectation && row.note !== expectation.note) {
+        throw new DOMException('Cette note a été modifiée depuis son ouverture.', 'InvalidStateError');
+      }
+      return { ...row, ...fields };
+    }), bookId),
+    deleteAnnotation: (id, bookId, expected) => expected ? removeNotebookRow('annotations', expected)
+      : notifyReader(tx('annotations', 'readwrite', (s) => s.delete(id)), bookId),
     /* Lectures complètes pour la sauvegarde (V2.25) : l'export et la
        restauration parcourent chaque magasin sans se soucier du livre. */
     allAnnotations: () => reqToPromise('annotations', 'readonly', (s) => s.getAll()),
@@ -543,7 +591,8 @@ NC.db = (() => {
       b.page ? row.page === b.page :
         typeof b.sectionIndex === 'number' && row.sectionIndex === b.sectionIndex &&
         (b.pageInSec == null || row.pageInSec == null || row.pageInSec === b.pageInSec)), b.bookId),
-    deleteBookmark: (id, bookId) => notifyReader(tx('bookmarks', 'readwrite', (s) => s.delete(id)), bookId),
+    deleteBookmark: (id, bookId, expected) => expected ? removeNotebookRow('bookmarks', expected)
+      : notifyReader(tx('bookmarks', 'readwrite', (s) => s.delete(id)), bookId),
 
     /* ── Historique des passages (n°9) ──
        addHistory écrit puis borne le journal du livre aux « cap »

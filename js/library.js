@@ -386,6 +386,7 @@ NC.library = (() => {
     render();
     if (NC.goal) NC.goal.refresh();
     if (NC.backup) NC.backup.refreshNotice();
+    NC.notebook?.refreshIfVisible();
   }
 
   /* ── Objectif de lecture (V2.24) : les « Terminé », datés ──
@@ -1361,6 +1362,7 @@ NC.library = (() => {
      avec entrées factices), même philosophie que NC.reader._state(). */
   return {
     init, refresh, importFiles, focusBook,
+    notebookBooks: () => books.map(({ id, title, author, type }) => ({ id, title, author, type })),
     /* Packs (V2.22) : aperçu d'un fichier sans l'ajouter, import
        d'un fichier avec méta déjà lue, doublons, raison d'échec. */
     importOne, peepFile, librarySignatures, looksKnown, shortReason,

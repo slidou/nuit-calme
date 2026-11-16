@@ -606,7 +606,8 @@ NC.openPdf = async function (rec, opts) {
   };
 
   ctl.removeHighlight = async (ann) => {
-    await NC.db.deleteAnnotation(ann.id, rec.id);
+    const removed = await NC.db.deleteAnnotation(ann.id, rec.id, ann);
+    if (!removed) return;
     const i = annCache.findIndex((a) => a.id === ann.id);
     if (i >= 0) annCache.splice(i, 1);
     stage.querySelectorAll('.nc-pdf-page').forEach((wrap) => {
@@ -766,7 +767,7 @@ NC.openPdf = async function (rec, opts) {
     ctl.page = Math.max(1, Math.min(doc.numPages, Math.round(p * (doc.numPages - 1)) + 1));
     await render();
   };
-  ctl.saveProgress = () => writeProgress({
+  ctl.saveProgress = () => opts.preview ? Promise.resolve() : writeProgress({
     lastPage: ctl.page,
     zoom: ctl.zoom,
     fit: ctl.fit,
@@ -819,6 +820,12 @@ NC.openPdf = async function (rec, opts) {
   ctl.gotoPage = async (p) => {
     ctl.page = Math.max(1, Math.min(doc.numPages, p));
     await render();
+  };
+
+  ctl.visitSavedPassage = async ({ page }) => {
+    if (!Number.isInteger(page) || page < 1 || page > doc.numPages) return null;
+    await ctl.gotoPage(page);
+    return 'page';
   };
 
   /* ── Recherche texte ── */

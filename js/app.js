@@ -10,6 +10,7 @@
   try {
     NC.reader.init();
     NC.packs.init();
+    NC.notebook.init();
     NC.goal.init(); // objectif de lecture (V2.24) : câblage de la bannière
     NC.backup.init(); // sauvegarde & restauration (V2.25) : bouton, modale, rappel
     await NC.library.init();

@@ -8,6 +8,7 @@
 NC.reader = (() => {
   let ctl = null;        // contrôleur epub ou pdf courant
   let current = null;    // enregistrement du livre
+  let notebookVisit = null;
   let flipping = false;
   let bookTheme = 'paper'; // thème du CONTENU du livre (papier | nuit) — indépendant du site
   let focusMode = false;   // mode concentration (ajout n°5)
@@ -53,19 +54,29 @@ NC.reader = (() => {
     NC.$$('.reader-actions button:not(#btn-kbd), #nav-prev, #nav-next, #progress')
       .forEach((button) => { button.disabled = loading; });
   }
-  async function open(bookId) {
-    if (opening) return;
+  async function open(bookId, consultation = null) {
+    if (opening || current) return false;
     opening = true;
     const gen = ++openGen;
-    try { await openInner(bookId, gen); }
+    try { return await openInner(bookId, gen, consultation); }
+    catch (error) {
+      console.error('Ouverture du livre', error);
+      if (gen === openGen) {
+        NC.toast('Ce livre n’a pas pu être ouvert.', 'error');
+        if (current) await close(true);
+      }
+      return false;
+    }
     finally { opening = false; }
   }
 
-  async function openInner(bookId, gen) {
+  async function openInner(bookId, gen, consultation) {
     const rec = await NC.db.getBook(bookId);
     if (!rec) { NC.toast('Livre introuvable.', 'error'); return; }
     if (gen !== openGen) return; // cette ouverture a été dépassée entre-temps
     current = rec;
+    notebookVisit = consultation;
+    const preview = !!consultation;
     /* Filtres du tiroir Soulignages & notes : réinitialisés à CHAQUE
        ouverture de livre — l'état d'un livre ne doit pas teinter le
        suivant (comportement documenté en V2.8, non appliqué jusqu'ici). */
@@ -74,11 +85,15 @@ NC.reader = (() => {
        lire » passe « En cours » tout seul. Un livre « Terminé » n'est
        pas rabaissé (réouverture pour une citation, un passage). */
     statusNow = null;
-    initReadStatus(rec.id);
+    if (!preview) initReadStatus(rec.id);
 
     // Vue
     $('#view-library').hidden = true;
+    $('#view-notebook').hidden = true;
     $('#view-reader').hidden = false;
+    $('#reader-preview-hint').hidden = !preview;
+    $('#btn-back').title = preview ? 'Retour au carnet' : 'Retour à la bibliothèque';
+    $('#btn-back').setAttribute('aria-label', $('#btn-back').title);
     setReaderLoading(true);
     $('#reader-book-title').textContent = rec.title;
     $('#reader-loc').textContent = 'Ouverture…';
@@ -131,7 +146,7 @@ NC.reader = (() => {
          (module centralisé). L'ancienne valeur y est recopiée une seule fois. */
       if (prefsRec && prefsRec.fontSize) {
         epubFont = prefsRec.fontSize;
-      } else if (epubFont !== 100) {
+      } else if (!preview && epubFont !== 100) {
         NC.db.patchPrefs(rec.id, { fontSize: epubFont }).catch(() => {});
       }
     }
@@ -164,8 +179,8 @@ NC.reader = (() => {
     let newCtl;
     try {
       newCtl = rec.type === 'epub'
-        ? await NC.openEpub(rec, { spread, flow, lastCfi, fontSize: epubFont, theme: bookTheme, typo: wantedTypo })
-        : await NC.openPdf(rec, { spread, lastPage: pdfLastPage, zoom: pdfZoom, fit: pdfFit, theme: bookTheme });
+        ? await NC.openEpub(rec, { spread, flow, lastCfi, fontSize: epubFont, theme: bookTheme, typo: wantedTypo, preview })
+        : await NC.openPdf(rec, { spread, lastPage: pdfLastPage, zoom: pdfZoom, fit: pdfFit, theme: bookTheme, preview });
     } catch (err) {
       console.error(err);
       NC.toast(/password/i.test(String(err)) ? 'Ce PDF est protégé par un mot de passe.' : 'Ce livre n\'a pas pu être ouvert.', 'error');
@@ -176,7 +191,6 @@ NC.reader = (() => {
        ce qui vient d'être créé au lieu de le laisser vivre en fantôme. */
     if (gen !== openGen) { try { newCtl.destroy(); } catch (e) {} return; }
     ctl = newCtl;
-    setReaderLoading(false);
     /* Vignettes (V2.18) : à l'ouverture, le tiroir d'un PDF s'affiche
        en sommaire si le livre en fournit un, sinon en vignettes. */
     pdfTocMode = (ctl.type === 'pdf' && ctl.toc && ctl.toc.length) ? 'toc' : 'thumbs';
@@ -192,10 +206,19 @@ NC.reader = (() => {
     if (gen !== openGen) return;
     bookmarkCache = bookmarks;
     visit = null;
+    if (preview && consultation.target) {
+      const destination = await ctl.visitSavedPassage(consultation.target).catch(() => null);
+      if (gen !== openGen) return;
+      if (destination === 'section') NC.toast('Repère précis indisponible. Ouverture au début de la section.', 'info');
+      else if (!destination) NC.toast('Passage introuvable. Le livre s’ouvre à votre position habituelle.', 'info');
+    }
+    setReaderLoading(false);
     updateBookmarkBtn();
-    trackPosition(); // première position de la session (déjà connue pour le PDF)
-    startStatsTracking(rec.id); // chronomètre de lecture (V2.12)
-    statsNotePosition();        // la première page compte aussi (déjà affichée à l'ouverture)
+    if (!preview) {
+      trackPosition();
+      startStatsTracking(rec.id);
+      statsNotePosition();
+    }
     updateSpreadBtn();
     applyBookThemeUi(bookTheme);
     $('#btn-flow').hidden = rec.type !== 'epub'; // défilement vertical : EPUB seulement
@@ -208,9 +231,9 @@ NC.reader = (() => {
       .catch(() => {});
 
     // Reprise de lecture (basée sur les valeurs réellement restaurées)
-    if (rec.type === 'epub' && lastCfi) {
+    if (!preview && rec.type === 'epub' && lastCfi) {
       NC.toast('Reprise de lecture à l\'endroit exact où vous vous étiez arrêté.', 'success');
-    } else if (rec.type === 'pdf' && pdfLastPage > 1) {
+    } else if (!preview && rec.type === 'pdf' && pdfLastPage > 1) {
       NC.toast(`Reprise de lecture à la page ${pdfLastPage}.`, 'success');
     }
     /* « Dernière ouverture » : notée dans l'enregistrement léger de
@@ -226,6 +249,8 @@ NC.reader = (() => {
       });
       ctl.saveProgress(); // lastOpened + page courante, quelques octets seulement
     }
+    else if (preview && ctl.location?.start) onRelocated(ctl.location);
+    return true;
   }
 
   /* ── Événements de position ── */
@@ -269,10 +294,12 @@ NC.reader = (() => {
     markCurrentToc();
     /* Historique (n°9) : chaque position tenue laisse une trace.
        Marque-page (n°8) : l'état du bouton suit la position. */
-    trackPosition();
     updateBookmarkBtn();
-    statsNotePosition(loc); // pages vues → statistiques (V2.12)
-    maybeMarkFinished(loc); // fin du livre → « Terminé » (V2.14)
+    if (!notebookVisit) {
+      trackPosition();
+      statsNotePosition(loc);
+      maybeMarkFinished(loc);
+    }
   }
 
   const rec_title = () => (current ? current.title : '');
@@ -1464,9 +1491,24 @@ NC.reader = (() => {
       del.className = 'mini-btn danger';
       del.type = 'button';
       del.textContent = 'Supprimer';
+      del.addEventListener('blur', () => {
+        del.classList.remove('confirm');
+        del.textContent = 'Supprimer';
+      });
       del.addEventListener('click', async () => {
-        try { await ctl.removeHighlight(a); }
-        catch (error) { NC.toast('L’annotation n’a pas pu être supprimée.', 'error'); }
+        if (!del.classList.contains('confirm')) {
+          del.classList.add('confirm');
+          del.textContent = 'Confirmer la suppression';
+          return;
+        }
+        try {
+          await ctl.removeHighlight(a);
+          NC.toast('Annotation retirée.', 'success');
+        } catch (error) {
+          NC.toast(error.name === 'InvalidStateError'
+            ? 'L’annotation a changé. Vérifiez la nouvelle version avant de la supprimer.'
+            : 'L’annotation n’a pas pu être supprimée.', 'error');
+        }
         if (drawerKind === 'notes') renderNotes($('#drawer-body'));
       });
       actions.append(del);
@@ -2157,6 +2199,7 @@ NC.reader = (() => {
   /* ── Fermeture ── */
   async function close(silent) {
     const bookId = current?.id;
+    const returnToNotebook = notebookVisit;
     openGen++; // toute ouverture encore en vol devient périmée
     endVisit(); // clôture le passage en cours (s'il a assez vécu) — n°9
     stopStatsTracking(); // arrête le chronomètre et écrit le reliquat — V2.12
@@ -2166,6 +2209,7 @@ NC.reader = (() => {
       ctl = null;
     }
     current = null;
+    notebookVisit = null;
     bookmarkCache = [];
     closeCatPop();   // popover de catégorie ouvert depuis le tiroir (V2.26)
     closeKbdPop();   // mémo des raccourcis : panneau sans voile, cliquable derrière (V2.26)
@@ -2187,6 +2231,10 @@ NC.reader = (() => {
     delete document.body.dataset.chrome;
     clearTimeout(chromeTimer);
     $('#view-reader').hidden = true;
+    if (returnToNotebook) {
+      await NC.notebook.resume(returnToNotebook.key);
+      return;
+    }
     $('#view-library').hidden = false;
     if (!silent) await NC.library.refresh();
     if (bookId !== undefined) NC.library.focusBook(bookId);
@@ -2196,14 +2244,15 @@ NC.reader = (() => {
   function init() {
     let refreshReaderTimer;
     NC.db.onReaderChange((bookId) => {
-      if (!ctl || current?.id !== bookId) return;
+      if (!ctl || (bookId !== null && current?.id !== bookId)) return;
       const reader = ctl;
+      const id = current.id;
       clearTimeout(refreshReaderTimer);
       refreshReaderTimer = setTimeout(async () => {
         if (ctl !== reader) return;
         try {
           const [bookmarks] = await Promise.all([
-            NC.db.bookmarksFor(bookId),
+            NC.db.bookmarksFor(id),
             reader.restoreHighlights(),
           ]);
           if (ctl !== reader) return;

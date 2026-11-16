@@ -466,7 +466,7 @@ NC.openEpub = async function (rec, opts) {
   const writeProgress = NC.progressWriter(rec.id);
   ctl.saveProgress = () => {
     const loc = ctl.location;
-    if (!loc?.start?.cfi) return Promise.resolve();
+    if (opts.preview || !loc?.start?.cfi) return Promise.resolve();
     return writeProgress({
       fontSize: ctl.fontSize,
       lastCfi: loc.start.cfi,
@@ -976,7 +976,7 @@ NC.openEpub = async function (rec, opts) {
   ctl.updateNote = async (ann, noteText) => {
     const val = String(noteText || '').slice(0, 4000);
     const target = annCache.find((a) => a.id === ann.id);
-    const row = await NC.db.patchAnnotation(ann.id, { note: val, updatedAt: Date.now() }, rec.id);
+    const row = await NC.db.patchAnnotation(ann.id, { note: val, updatedAt: Date.now() }, rec.id, { note: ann.note });
     if (!row) throw new Error('Annotation supprimée');
     if (target) Object.assign(target, row);
     return true;
@@ -1017,7 +1017,8 @@ NC.openEpub = async function (rec, opts) {
   };
 
   ctl.removeHighlight = async (ann) => {
-    await NC.db.deleteAnnotation(ann.id, rec.id);
+    const removed = await NC.db.deleteAnnotation(ann.id, rec.id, ann);
+    if (!removed) return;
     annCache = annCache.filter((a) => a.id !== ann.id);
     const views = [];
     try { ctl._rendition.views().forEach((v) => views.push(v)); } catch (e) {}
@@ -1094,6 +1095,22 @@ NC.openEpub = async function (rec, opts) {
         if (sec && sec.href) { await ctl._rendition.display(sec.href); return; }
       } catch (e) {}
     }
+  };
+
+  ctl.visitSavedPassage = async ({ cfi, sectionIndex }) => {
+    if (!ctl._rendition) return null;
+    if (typeof cfi === 'string' && /^epubcfi\(.+\)$/.test(cfi)) {
+      try {
+        if (book.spine.get(cfi)) {
+          await ctl._rendition.display(cfi);
+          return 'cfi';
+        }
+      } catch (error) { /* essayer la section enregistrée */ }
+    }
+    const section = Number.isInteger(sectionIndex) && book.spine.spineItems[sectionIndex];
+    if (!section?.href) return null;
+    await ctl._rendition.display(section.href);
+    return 'section';
   };
 
   /* ── Recherche plein texte ── */

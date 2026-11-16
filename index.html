@@ -30,6 +30,7 @@
       <p class="tagline">Liseuse EPUB &amp; PDF — votre bibliothèque, en toute intimité.</p>
     </div>
     <div class="lib-actions">
+      <button id="btn-notebook" class="btn" type="button">Carnet</button>
       <!-- PWA (V2.23) : caché tant que le navigateur n'a pas proposé
            l'installation — ou tant que le visiteur n'est pas sur iOS,
            où le bouton explique le geste (Partager → écran d'accueil). -->
@@ -160,6 +161,82 @@
   </section>
 </main>
 
+<!-- ══════════════ CARNET ══════════════ -->
+<main id="view-notebook" hidden>
+  <div class="notebook-shell">
+    <header class="notebook-header">
+      <button id="notebook-back" class="mini-btn" type="button">← Bibliothèque</button>
+      <div class="notebook-intro">
+        <div>
+          <h1 id="notebook-title" tabindex="-1">Carnet</h1>
+          <p>Les mots gardés au fil de vos lectures.</p>
+        </div>
+        <div class="notebook-exports">
+          <button id="notebook-export" class="btn btn-gold" type="button">Exporter le carnet</button>
+          <button id="notebook-export-filtered" class="btn" type="button">Exporter les résultats</button>
+        </div>
+      </div>
+    </header>
+    <section class="notebook-tools" aria-label="Rechercher et filtrer le carnet">
+      <label class="notebook-search">Rechercher
+        <input id="notebook-search" type="search" placeholder="Une phrase, un livre, un auteur…" autocomplete="off">
+      </label>
+      <div class="notebook-filters">
+        <label>Livre <select id="notebook-book"><option value="">Tous les livres</option></select></label>
+        <label>Type <select id="notebook-type">
+          <option value="">Tous les types</option><option value="quote">Avec citation</option>
+          <option value="note">Notes personnelles</option><option value="highlight">Surlignages</option>
+          <option value="bookmark">Signets</option>
+        </select></label>
+        <label>Couleur <select id="notebook-color"><option value="">Toutes</option></select></label>
+        <label>Date <select id="notebook-date">
+          <option value="">Toutes</option><option value="recent">30 derniers jours</option>
+          <option value="year">Cette année</option><option value="unknown">Sans date</option>
+        </select></label>
+        <label>Trier par <select id="notebook-sort">
+          <option value="recent">Date récente</option><option value="old">Date ancienne</option>
+          <option value="book">Livre, A–Z</option>
+        </select></label>
+      </div>
+    </section>
+    <div class="notebook-result-bar">
+      <p id="notebook-status" role="status" aria-atomic="true"></p>
+      <button id="notebook-reset" class="mini-btn" type="button" hidden>Réinitialiser les filtres</button>
+    </div>
+    <div id="notebook-empty" class="notebook-empty" hidden>
+      <h2 id="notebook-empty-title"></h2>
+      <p id="notebook-empty-text"></p>
+      <button id="notebook-retry" class="mini-btn" type="button" hidden>Réessayer</button>
+    </div>
+    <section id="notebook-results" aria-label="Entrées du carnet"></section>
+    <button id="notebook-more" class="btn" type="button" hidden>Afficher plus d’entrées</button>
+  </div>
+</main>
+<div id="notebook-backdrop" hidden></div>
+<div id="notebook-entry" hidden role="dialog" aria-modal="true" aria-labelledby="notebook-entry-title">
+  <p id="notebook-entry-meta" class="notebook-eyebrow"></p>
+  <h2 id="notebook-entry-title" tabindex="-1"></h2>
+  <p id="notebook-entry-author" class="notebook-author" hidden></p>
+  <div id="notebook-entry-content"></div>
+  <label id="notebook-note-field" hidden>Note personnelle
+    <textarea id="notebook-note" rows="5" maxlength="4000"></textarea>
+  </label>
+  <p id="notebook-entry-error" role="alert" hidden></p>
+  <div class="notebook-entry-actions">
+    <button id="notebook-entry-close" class="mini-btn" type="button">Fermer</button>
+    <button id="notebook-entry-edit" class="mini-btn" type="button" hidden>Modifier la note</button>
+    <button id="notebook-entry-save" class="btn btn-gold" type="button" hidden>Enregistrer</button>
+    <button id="notebook-entry-delete" class="mini-btn danger" type="button">Supprimer</button>
+  </div>
+  <div id="notebook-delete-confirm" class="notebook-confirm" hidden>
+    <p>Supprimer définitivement cette entrée du carnet et du livre ?</p>
+    <div class="notebook-entry-actions">
+      <button id="notebook-delete-cancel" class="mini-btn" type="button">Conserver l’entrée</button>
+      <button id="notebook-delete-accept" class="mini-btn danger" type="button">Confirmer la suppression</button>
+    </div>
+  </div>
+</div>
+
 <!-- ══════════════ LECTEUR ══════════════ -->
 <main id="view-reader" hidden>
   <header class="reader-top">
@@ -169,6 +246,7 @@
     <div class="reader-title">
       <div id="reader-book-title">—</div>
       <div id="reader-loc" class="reader-loc">—</div>
+      <div id="reader-preview-hint" class="reader-loc" hidden>Consultation du carnet · progression conservée</div>
     </div>
     <nav class="reader-actions" aria-label="Outils de lecture">
       <button id="btn-font" class="icon-btn text-btn" type="button" title="Typographie : taille, police, interlignage, alignement" aria-label="Réglages de typographie" aria-controls="font-pop" aria-expanded="false">Aa</button>
@@ -480,6 +558,7 @@
 <script src="js/pdf-reader.js"></script>
 <script src="js/touch.js"></script>
 <script src="js/reader.js"></script>
+<script src="js/notebook.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
