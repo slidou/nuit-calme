@@ -36,13 +36,8 @@ NC.goal = (() => {
   const keyOf = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
     + '-' + String(d.getDate()).padStart(2, '0');
   const todayKey = () => keyOf(new Date());
-  const dayDiff = (a, b) => Math.round((parseDay(a) - parseDay(b)) / DAY);
-  const shiftDays = (key, n) => keyOf(new Date(parseDay(key).getTime() + n * DAY));
-  /* Fin de journée inclusive : un livre fini le dernier jour compte. */
-  const endOf = (key) => {
-    const d = parseDay(key);
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999).getTime();
-  };
+  const dayDiff = (a, b) => (Date.parse(a + 'T00:00:00Z') - Date.parse(b + 'T00:00:00Z')) / DAY;
+  const shiftDays = NC.readingStats.shift;
   /* Décalage d'un nombre de mois, à jour fixé (31 janv. + 1 mois → 28/29 févr.). */
   const shiftMonths = (key, n) => {
     const d = parseDay(key);
@@ -120,35 +115,34 @@ NC.goal = (() => {
     try { localStorage.setItem(LS_KEY, JSON.stringify(goal)); } catch (e) { /* tant pis */ }
   }
 
-  /* ── Instantané : le compte du moment ──
-     Un livre compte quand sa fiche dit « Terminé » avec une date
-     connue (statusAt posé par la V2.24, repli updatedAt pour les
-     anciens) tombée DANS la période. Hors période : jamais compté. */
+  /* L'objectif compte les fins dont la date est connue et dans la période. */
   function snapshot() {
     if (!goal) return null;
     const tKey = todayKey();
     const started = dayDiff(tKey, goal.start) >= 0;
     const expired = dayDiff(tKey, goal.end) > 0;
-    const finished = (NC.library.finishedBooks ? NC.library.finishedBooks() : [])
-      .filter((f) => f.at >= parseDay(goal.start).getTime() && f.at <= endOf(goal.end));
+    const known = NC.library.finishedBooks ? NC.library.finishedBooks() : [];
+    const finished = known.filter((f) => f.date && f.date >= goal.start && f.date <= goal.end);
+    const undated = known.filter((f) => !f.date).length;
     const done = finished.length;
     const totalDays = dayDiff(goal.end, goal.start) + 1;
     const elapsed = started ? Math.min(totalDays, dayDiff(tKey, goal.start) + 1) : 0;
     const daysLeft = expired ? 0 : dayDiff(goal.end, tKey) + 1; // aujourd'hui compte
     const remainingBooks = Math.max(0, goal.target - done);
     let state;
-    if (expired) state = done >= goal.target ? 'atteint' : 'echu';
+    if (done > goal.target) state = 'depasse';
+    else if (expired) state = done === goal.target ? 'atteint' : 'echu';
     else if (done >= goal.target) state = 'atteint';
     else if (!started) state = 'avenir';
     else {
       const d = done / goal.target - elapsed / totalDays;
       state = d >= 0.1 ? 'avance' : d <= -0.15 ? 'retard' : 'ok';
     }
-    return { done, finished, totalDays, elapsed, daysLeft, remainingBooks, started, expired, state };
+    return { done, finished, undated, totalDays, elapsed, daysLeft, remainingBooks, started, expired, state };
   }
 
   const STATE_LABEL = {
-    atteint: 'Objectif atteint', avance: 'En avance', ok: 'Dans les temps',
+    atteint: 'Objectif atteint', depasse: 'Objectif dépassé', avance: 'En avance', ok: 'Dans les temps',
     retard: 'Un peu de retard', echu: 'Temps écoulé', avenir: 'À venir',
   };
 
@@ -240,7 +234,7 @@ NC.goal = (() => {
   }
 
   function subLine(s) {
-    if (s.state === 'atteint') {
+    if (s.state === 'atteint' || s.state === 'depasse') {
       return s.expired
         ? `<b>${pl(goal.target, 'livre')}</b> terminé${goal.target > 1 ? 's' : ''} — objectif rempli dans les temps`
         : `<b>${pl(goal.target, 'livre')}</b> terminé${goal.target > 1 ? 's' : ''} — objectif rempli`;
@@ -319,6 +313,7 @@ NC.goal = (() => {
       return r;
     };
     rows.appendChild(row('Période', fmtPeriod(goal.start, goal.end)));
+    if (s.undated) rows.appendChild(row('Date de fin inconnue', `${s.undated} hors du calcul de la période`));
     if (s.expired) rows.appendChild(row('Terminée le', fmtLong(goal.end, true)));
     else if (s.state !== 'avenir') rows.appendChild(row('Temps restant', s.daysLeft === 1 ? 'dernier jour' : `${fmtDays(s.daysLeft)} (jusqu\u2019au ${fmtLong(goal.end, false)})`));
     const pace = (s.state === 'ok' || s.state === 'avance' || s.state === 'retard') ? fmtPace(s.remainingBooks, s.daysLeft) : '';
@@ -508,6 +503,7 @@ NC.goal = (() => {
     if (pop) NC.modal.hide(pop);
     mode = goal ? 'view' : 'form';
     confirmRemove = false;
+    NC.statsDashboard?.refreshGoal();
   }
   const isOpen = () => { const pop = NC.$('#goal-pop'); return !!pop && !pop.hidden; };
 
@@ -516,7 +512,7 @@ NC.goal = (() => {
     if (!goal) return;
     const s = snapshot();
     if (!s) return;
-    if (s.state === 'atteint' && !s.expired && !goal.celebrated) {
+    if (['atteint', 'depasse'].includes(s.state) && !s.expired && !goal.celebrated) {
       goal.celebrated = true;
       save();
       NC.toast(`Objectif atteint — ${pl(goal.target, 'livre')} terminé${goal.target > 1 ? 's' : ''}. Belle lune.`, 'success', 6000);
@@ -543,5 +539,12 @@ NC.goal = (() => {
     });
   }
 
-  return { init, refresh, open, close, isOpen, _snapshot: snapshot };
+  function summary() {
+    load();
+    const data = snapshot();
+    return data && { ...data, ...goal, label: STATE_LABEL[data.state],
+      pace: data.started && !data.expired ? fmtPace(data.remainingBooks, data.daysLeft) : '' };
+  }
+
+  return { init, refresh, open, close, isOpen, summary, _snapshot: snapshot };
 })();

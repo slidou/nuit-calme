@@ -389,18 +389,14 @@ NC.library = (() => {
     NC.notebook?.refreshIfVisible();
   }
 
-  /* ── Objectif de lecture (V2.24) : les « Terminé », datés ──
-     statusAt porte la date du geste (posée à V2.24) ; les fiches
-     antérieures n'ont que updatedAt — la dernière fois que la fiche a
-     bougé — : le meilleur repli connu, sans jamais inventer une date.
-     La modale de l'objectif filtre ces livres par sa propre période. */
+  /* Les fiches antérieures sans statusAt restent terminées sans date connue. */
   function finishedBooks() {
     const out = [];
     for (const b of books) {
       const m = metas.get(b.id);
       if (!m || NC.normStatus(m.status) !== 'termine') continue;
-      const at = m.statusAt || m.updatedAt || null;
-      if (at) out.push({ id: b.id, title: b.title, at });
+      const at = Number.isFinite(m.statusAt) && m.statusAt > 0 ? m.statusAt : null;
+      out.push({ id: b.id, title: b.title, at, date: at ? (m.statusDay || NC.dateKey(at)) : null });
     }
     out.sort((a, z) => a.at - z.at);
     return out;
@@ -774,6 +770,11 @@ NC.library = (() => {
       pop.appendChild(popItem(meta.label, NC.STATUS_ICON[key], NC.normStatus(cur.status) === key,
         () => { setBookStatus(book.id, key); }));
     });
+    pop.appendChild(popItem('Activité de ce livre', null, false, () => {
+      const opener = NC.$(`#book-grid [data-book-id="${CSS.escape(book.id)}"] .card-menu`);
+      closeCardPop();
+      NC.statsDashboard.open(book, opener);
+    }, 'ghost'));
 
     const h2 = document.createElement('h4');
     h2.className = 'pop-title';

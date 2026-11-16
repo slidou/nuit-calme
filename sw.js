@@ -14,7 +14,7 @@
 
 const SCOPE = self.registration.scope;
 const CACHE_PREFIX = `nuit-calme:${SCOPE}:`;
-const CACHE = CACHE_PREFIX + 'v2.27-6';
+const CACHE = CACHE_PREFIX + 'v2.27-7';
 
 const PRECACHE = [
   './',
@@ -22,11 +22,14 @@ const PRECACHE = [
   'manifest.webmanifest',
   'css/style.css',
   'js/util.js',
+  'js/reading-stats.js',
+  'js/reading-tracker.js',
   'js/reading-profiles.js',
   'js/epub-anchor.js',
   'js/idb.js',
   'js/library.js',
   'js/goal.js',
+  'js/stats-dashboard.js',
   'js/backup.js',
   'js/packs.js',
   'js/epub-reader.js',

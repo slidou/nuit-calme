@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { testNotebook } from './notebook.mjs';
 import { testProfiles } from './reading-profiles.mjs';
+import { testStats, benchmarkStats } from './reading-stats.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const browser = process.env.NC_BROWSER || (process.platform === 'win32'
@@ -751,6 +752,10 @@ try {
     await testNotebook({ cdp, port, url, openTab, until, makeBooks });
   } else if (profiles || profilesBaseline) {
     await testProfiles({ cdp, port, url, openTab, until, makeBooks, baseline: profilesBaseline });
+  } else if (process.argv.includes('--stats')) {
+    await testStats({ cdp, port, url, openTab, until, makeBooks });
+  } else if (process.argv.includes('--stats-benchmark')) {
+    await benchmarkStats({ cdp, until });
   } else {
 
   assert.equal((await cdp.run(`(${rawCatalog})()`)).version, enableV8 ? 8 : 7);

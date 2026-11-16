@@ -103,7 +103,7 @@ NC.openPdf = async function (rec, opts) {
     };
   }
 
-  async function render() {
+  async function render(layoutOnly = false) {
     const gen = ++renderGen;
     ctl._tasks.forEach((t) => { try { t.cancel(); } catch (e) {} });
     ctl._tasks = [];
@@ -199,10 +199,10 @@ NC.openPdf = async function (rec, opts) {
        sur un gros PDF (fichier de 80 Mo mesuré) et martelait le stockage
        du navigateur. Désormais : quelques octets par page. */
     ctl.saveProgress();
-    if (ctl._onRelocated) ctl._onRelocated({ page: ctl.page, end, numPages: doc.numPages });
+    if (ctl._onRelocated) ctl._onRelocated({ page: ctl.page, end, numPages: doc.numPages }, layoutOnly, !layoutOnly);
   }
 
-  ctl.redisplay = () => render();
+  ctl.redisplay = () => render(true);
 
   /* Tourne-page au bord de la page, comme pour l'EPUB.
      Les canvas sont dans le DOM parent : les clics remontent normalement.
@@ -670,7 +670,7 @@ NC.openPdf = async function (rec, opts) {
 
   ctl.setSpread = async (mode) => {
     ctl.spread = mode;
-    await render();
+    await render(true);
   };
 
   ctl.setFontSize = null; // non applicable au PDF
@@ -685,7 +685,7 @@ NC.openPdf = async function (rec, opts) {
   ctl.setZoom = async (z) => {
     keepScroll(); // zoomer ne doit ni sauter au début, ni sauter à la fin
     ctl.zoom = Math.max(0.6, Math.min(2.2, z));
-    await render();
+    await render(true);
     return ctl.zoom;
   };
 
@@ -697,7 +697,7 @@ NC.openPdf = async function (rec, opts) {
     ctl.fit = (mode === 'width' || mode === 'height') ? mode : 'page';
     ctl.zoom = 1;
     keepScroll();
-    await render();
+    await render(true);
     return ctl.fit;
   };
 
@@ -910,7 +910,7 @@ NC.openPdf = async function (rec, opts) {
 
   ctl.captureName = () => `nuit-calme-${NC.slug(rec.title)}-p${ctl.page}.png`;
 
-  ctl.resize = () => { keepScroll(); return render(); };
+  ctl.resize = () => { keepScroll(); return render(true); };
 
   ctl.destroy = () => {
     destroyed = true;

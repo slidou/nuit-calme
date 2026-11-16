@@ -414,7 +414,8 @@ NC.db = (() => {
       t.onabort = () => reject(t.error);
       for (const name of BACKUP_STORES) {
         const request = t.objectStore(name).getAll();
-        request.onsuccess = () => { state[name] = request.result; };
+        request.onsuccess = () => { state[name] = name === 'settings'
+          ? request.result.filter((row) => row.key !== NC.readingStats.epochKey) : request.result; };
       }
     })),
     restoreBackup: (state, replace) => open().then((db) => new Promise((resolve, reject) => {
@@ -451,8 +452,12 @@ NC.db = (() => {
           const count = name === 'books' ? 'booksAdded' : name;
           const timestamp = BACKUP_TIMESTAMPS[name];
           counts[count] = 0;
-          if (replace) store.clear();
+          if (replace) {
+            store.clear();
+            if (name === 'settings') store.put({ key: NC.readingStats.epochKey, value: crypto.randomUUID() });
+          }
           for (const row of state[name]) {
+            if (name === 'settings' && row.key === NC.readingStats.epochKey) continue;
             if (replace) {
               if (name === 'books') {
                 putBookRow(t, row);
@@ -467,6 +472,14 @@ NC.db = (() => {
               const local = request.result;
               if (name === 'settings' && row.key === NC.profiles?.key && local) {
                 write(store, { ...local, value: NC.profiles.merge(local.value, row.value) }, count);
+              } else if (name === 'settings' && row.key === NC.readingStats.sinceKey && local) {
+                if (NC.readingStats.validDay(row.value) && (!NC.readingStats.validDay(local.value) || row.value < local.value)) write(store, row, count);
+              } else if (name === 'readstats' && local && (local.journal || row.journal)) {
+                write(store, NC.readingStats.merge(local, row), count);
+              } else if (name === 'bookmeta' && local && (local.firstOpenedAt || row.firstOpenedAt)) {
+                const newer = (row.updatedAt || 0) > (local.updatedAt || 0) ? row : local;
+                const firstOpenedAt = Math.min(local.firstOpenedAt || Infinity, row.firstOpenedAt || Infinity);
+                write(store, { ...newer, firstOpenedAt }, count);
               } else if (!local || (timestamp && (row[timestamp] || 0) > (local[timestamp] || 0))) {
                 write(store, row, count);
               } else if (name === 'books') {
@@ -671,6 +684,70 @@ NC.db = (() => {
     allReadStats: () => reqToPromise('readstats', 'readonly', (s) => s.getAll())
       .then((all) => (Array.isArray(all) ? all : [])),
 
+    prepareReadingStats: (date) => open().then((db) => new Promise((resolve, reject) => {
+      const t = db.transaction('settings', 'readwrite');
+      const settings = t.objectStore('settings');
+      const epoch = settings.get(NC.readingStats.epochKey);
+      const start = settings.get(NC.readingStats.sinceKey);
+      start.onsuccess = () => {
+        if (!NC.readingStats.validDay(start.result?.value)) settings.put({ key: NC.readingStats.sinceKey, value: date });
+      };
+      t.oncomplete = () => resolve(epoch.result?.value ?? null);
+      t.onabort = () => reject(t.error || new Error('Suivi indisponible'));
+    })),
+
+    commitReadingStats: (samples) => open().then((db) => new Promise((resolve, reject) => {
+      const t = db.transaction(['books', 'settings', 'readstats'], 'readwrite');
+      const books = t.objectStore('books');
+      const stats = t.objectStore('readstats');
+      const epoch = t.objectStore('settings').get(NC.readingStats.epochKey);
+      epoch.onsuccess = () => {
+        const byBook = new Map();
+        for (const sample of samples) {
+          if (sample.context.epoch !== (epoch.result?.value ?? null)) continue;
+          if (!byBook.has(sample.bookId)) byBook.set(sample.bookId, new Map());
+          const days = byBook.get(sample.bookId);
+          if (!days.has(sample.id)) days.set(sample.id, []);
+          days.get(sample.id).push(sample);
+        }
+        for (const [id, days] of byBook) {
+          const present = books.getKey(id);
+          present.onsuccess = () => {
+            if (present.result === undefined) return;
+            for (const [key, entries] of days) {
+              const old = stats.get(key);
+              old.onsuccess = () => {
+                const row = entries.reduce(NC.readingStats.append, old.result);
+                if (row !== old.result) stats.put(row);
+              };
+            }
+          };
+        }
+      };
+      t.oncomplete = () => resolve();
+      t.onabort = () => reject(t.error || new Error('Écriture des statistiques annulée'));
+    })),
+
+    readingStatsSnapshot: (bookId) => open().then((db) => new Promise((resolve, reject) => {
+      const stores = ['books', 'readstats', 'settings', 'bookmeta'];
+      if (bookId) stores.push('progress', 'annotations', 'bookmarks');
+      const t = db.transaction(stores, 'readonly');
+      const use = (name) => t.objectStore(name);
+      const requests = {
+        ids: bookId ? use('books').getKey(bookId) : use('books').getAllKeys(),
+        rows: bookId ? use('readstats').index('bookId').getAll(bookId) : use('readstats').getAll(),
+        coverage: use('settings').get(NC.readingStats.sinceKey),
+        meta: bookId ? use('bookmeta').get(bookId) : use('bookmeta').getAll(),
+      };
+      if (bookId) {
+        requests.progress = use('progress').get(bookId);
+        requests.annotations = use('annotations').index('bookId').getAll(bookId);
+        requests.bookmarks = use('bookmarks').index('bookId').count(bookId);
+      }
+      t.oncomplete = () => resolve(Object.fromEntries(Object.entries(requests).map(([key, req]) => [key, req.result])));
+      t.onabort = () => reject(t.error || new Error('Lecture des statistiques annulée'));
+    })),
+
     /* ── Statut de lecture & groupes (V2.14) ──
        bookmeta : UNE fiche légère par livre — { id, status, groupId,
        updatedAt }. Livre sans fiche = « À lire », sans groupe (repli
@@ -681,13 +758,20 @@ NC.db = (() => {
     getBookMeta: (id) => reqToPromise('bookmeta', 'readonly', (s) => s.get(id)),
     allBookMeta: () => reqToPromise('bookmeta', 'readonly', (s) => s.getAll()),
     putBookMeta: (m) => tx('bookmeta', 'readwrite', (s) => s.put(m)),
-    changeBookMeta: (id, fields, { keepFinished = false } = {}) =>
+    changeBookMeta: (id, fields, { keepFinished = false, opened = false, finishSource = 'manual' } = {}) =>
       notifyCatalog(update('bookmeta', id, (row) => {
         const previousStatus = NC.normStatus(row?.status);
-        if (keepFinished && previousStatus === 'termine') return row;
+        if (keepFinished && previousStatus === 'termine' && (!opened || row.firstOpenedAt)) return row;
         const next = { ...row, ...fields, id, updatedAt: Date.now() };
-        if (fields.status && fields.status !== previousStatus) {
-          next.statusAt = fields.status === 'termine' ? next.updatedAt : null;
+        if (opened && !next.firstOpenedAt) next.firstOpenedAt = next.updatedAt;
+        if (keepFinished && previousStatus === 'termine') {
+          next.status = previousStatus;
+          next.updatedAt = row.updatedAt;
+        }
+        if (fields.status && next.status !== previousStatus) {
+          next.statusAt = next.status === 'termine' ? next.updatedAt : null;
+          next.statusDay = next.statusAt ? NC.dateKey(next.statusAt) : null;
+          next.finishSource = next.status === 'termine' ? finishSource : null;
         }
         return next;
       }, id)),

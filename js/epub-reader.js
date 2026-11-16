@@ -61,6 +61,7 @@ NC.openEpub = async function (rec, opts) {
   let stableAnchor = null;
   let anchorScroll = '';
   let reflowPending = 0;
+  let navigating = false;
   let layoutChain = Promise.resolve();
   let hostSize;
   let observer;
@@ -84,7 +85,7 @@ NC.openEpub = async function (rec, opts) {
       ? `body { padding-inline:${padding} !important; }` : '');
   }
 
-  function publish(r, location) {
+  function publish(r, location, moved = false) {
     if (!location?.start?.cfi || r !== ctl._rendition || ctl._destroyed) return;
     const scroll = scrollKey(r);
     if (ctl.location?.start?.cfi !== location.start.cfi || !stableAnchor || scroll !== anchorScroll) {
@@ -92,7 +93,7 @@ NC.openEpub = async function (rec, opts) {
       anchorScroll = scroll;
     }
     ctl.location = location;
-    ctl._onRelocated?.(location);
+    ctl._onRelocated?.(location, false, moved);
   }
 
   /* Ouverture initiale, puis créations sérialisées avec la navigation. */
@@ -127,6 +128,9 @@ NC.openEpub = async function (rec, opts) {
       try { wireWheelNav(contents); } catch (e) { console.error(e); }
       wireEdgeTurn(contents);
       contents.document.addEventListener('keydown', NC.reader.onContentKey);
+      for (const event of ['pointerdown', 'wheel', 'keydown', 'touchstart']) {
+        contents.document.addEventListener(event, NC.reader.onReadingGesture, { capture: true, passive: true });
+      }
       /* Gestes tactiles (V2.17) : balayages, zones de tap et pinch à
          l'intérieur du papier — un toucher sur l'iframe n'arrive jamais
          au document parent. Échoue doucement si le module est absent. */
@@ -147,7 +151,7 @@ NC.openEpub = async function (rec, opts) {
       }, 140);
     };
     r.on('relocated', (loc) => {
-      if (!reflowPending) publish(r, loc);
+      if (!reflowPending && !navigating) publish(r, loc);
       scheduleRedraw();
     });
     r.on('selected', onSelected);
@@ -265,8 +269,11 @@ NC.openEpub = async function (rec, opts) {
     return queueLayout(async () => {
       const r = ctl._rendition;
       stableAnchor = null;
-      await move(r);
-      publish(r, await r.currentLocation());
+      navigating = true;
+      try {
+        await move(r);
+        publish(r, await r.currentLocation(), true);
+      } finally { navigating = false; }
     });
   }
 
@@ -549,7 +556,7 @@ NC.openEpub = async function (rec, opts) {
     if (ctl._destroyed) return;
     ctl.locationsReady = true;
     // Recalcule la position courante maintenant que les locations existent
-    if (ctl.location && ctl._onRelocated) ctl._onRelocated(ctl.location);
+    if (ctl.location && ctl._onRelocated) ctl._onRelocated(ctl.location, true);
   }).catch(() => {});
 
   /* ── Sommaire ── */

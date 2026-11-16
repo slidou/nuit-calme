@@ -9,7 +9,7 @@ NC.reader = (() => {
   let ctl = null;        // contrôleur epub ou pdf courant
   let current = null;    // enregistrement du livre
   let notebookVisit = null;
-  let flipping = false;
+  let finishFlip = null;
   let bookTheme = 'paper'; // thème du CONTENU du livre (papier | nuit) — indépendant du site
   let legacyReading;
   let readingState;
@@ -26,21 +26,7 @@ NC.reader = (() => {
   let chromeTimer = null;   // retard du re-dessin après bascule des barres
   let pdfTocMode = 'toc';   // tiroir PDF : 'toc' (sommaire) ou 'thumbs' (vignettes, V2.18)
 
-  /* ── Statistiques de lecture (V2.12) : état du suivi ── */
-  const STATS_TICK_MS = 5000;       // pas de crédit du temps
-  const STATS_FLUSH_TICKS = 6;      // ~30 s entre deux écritures en base
-  const STATS_MAX_SLICE_MS = 60000; // au-delà : sommeil ou saut d'horloge — pas de crédit
-  const STATS_MAX_PAGES = 4;        // garde-fou contre des positions aberrantes
-  let STATS_IDLE_MS = 180000;       // 3 min sans rien : lecture en pause (surchargé par les tests)
-  let statsBookId = null;           // livre actuellement chronométré
-  let statsTimer = null;            // intervalle de crédit (STATS_TICK_MS)
-  let statsLastActivity = 0;        // dernière interaction (tourne-page, souris, clavier…)
-  let statsLastTick = 0;            // dernier crédit horaire
-  let statsPendingSec = 0;          // secondes accumulées, pas encore écrites en base
-  let statsPendingPages = 0;        // pages accumulées, pas encore écrites en base
-  const statsRetry = new Map();     // écritures échouées, par livre et par jour
-  let statsPageKey = '';            // dernière position comptée (anti-doublon de re-rendu)
-  let statsTickN = 0;               // ticks depuis la dernière écriture
+  const readingTracker = NC.readingTracker.create();
 
   const $ = NC.$;
 
@@ -90,7 +76,6 @@ NC.reader = (() => {
        lire » passe « En cours » tout seul. Un livre « Terminé » n'est
        pas rabaissé (réouverture pour une citation, un passage). */
     statusNow = null;
-    if (!preview) initReadStatus(rec.id);
 
     // Vue
     $('#view-library').hidden = true;
@@ -227,9 +212,11 @@ NC.reader = (() => {
     setReaderLoading(false);
     updateBookmarkBtn();
     if (!preview) {
+      await initReadStatus(rec.id);
+      if (gen !== openGen) return;
       trackPosition();
-      startStatsTracking(rec.id);
-      statsNotePosition();
+      readingTracker.start(rec.id);
+      statsNotePosition(null, false);
     }
     updateSpreadBtn();
     applyBookThemeUi(bookTheme);
@@ -266,7 +253,7 @@ NC.reader = (() => {
   }
 
   /* ── Événements de position ── */
-  function onRelocated(loc, layoutOnly = false) {
+  function onRelocated(loc, layoutOnly = false, moved = false) {
     if (!ctl) return;
     if (draggingBar) return; // le lecteur ne pique pas le curseur pendant un glissement
     let label = '';
@@ -307,10 +294,9 @@ NC.reader = (() => {
     /* Historique (n°9) : chaque position tenue laisse une trace.
        Marque-page (n°8) : l'état du bouton suit la position. */
     updateBookmarkBtn();
-    if (!notebookVisit && layoutOnly) statsNotePosition(loc, false);
+    if (!notebookVisit) statsNotePosition(loc, moved && !layoutOnly);
     if (!notebookVisit && !layoutOnly) {
       trackPosition();
-      statsNotePosition(loc);
       maybeMarkFinished(loc);
     }
   }
@@ -331,7 +317,7 @@ NC.reader = (() => {
   async function initReadStatus(bookId) {
     try {
       const generation = openGen;
-      const row = await NC.db.changeBookMeta(bookId, { status: 'encours' }, { keepFinished: true });
+      const row = await NC.db.changeBookMeta(bookId, { status: 'encours' }, { keepFinished: true, opened: true });
       if (generation === openGen && row) statusNow = NC.normStatus(row.status);
     } catch (e) { console.error('statut de lecture', e); }
   }
@@ -351,7 +337,7 @@ NC.reader = (() => {
     const bookId = current.id;
     const title = current.title;
     const generation = openGen;
-    NC.db.changeBookMeta(bookId, { status: 'termine' })
+    NC.db.changeBookMeta(bookId, { status: 'termine' }, { finishSource: ctl.type })
       .then((row) => {
         if (row && generation === openGen) NC.toast(`« ${title} » est terminé — marqué comme tel dans la bibliothèque.`, 'success', 3200);
       })
@@ -390,25 +376,30 @@ NC.reader = (() => {
 
   /* ── Tourne-page théâtral ── */
   function flip(dir, action) {
-    if (flipping) return;
+    if (finishFlip) return;
     const reader = ctl;
-    const turn = () => { if (ctl === reader) return action(); };
+    const turn = () => { if (ctl === reader && finishFlip === finish) return action(); };
+    let overlay;
+    let turnTimer;
+    let finishTimer;
+    const finish = () => {
+      clearTimeout(turnTimer);
+      clearTimeout(finishTimer);
+      overlay?.remove();
+      if (finishFlip === finish) finishFlip = null;
+    };
+    finishFlip = finish;
     if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      flipping = true;
-      Promise.resolve().then(turn).catch(console.error).finally(() => { flipping = false; });
+      Promise.resolve().then(turn).catch(console.error).finally(finish);
       return;
     }
     const frame = $('#book-frame');
-    const ov = document.createElement('div');
-    ov.className = 'flip ' + (dir > 0 ? 'flip-next' : 'flip-prev');
-    frame.appendChild(ov);
-    flipping = true;
+    overlay = document.createElement('div');
+    overlay.className = 'flip ' + (dir > 0 ? 'flip-next' : 'flip-prev');
+    frame.appendChild(overlay);
     // On change la page quand la feuille est à moitié soulevée
-    setTimeout(() => { Promise.resolve().then(turn).catch(console.error); }, 300);
-    setTimeout(() => {
-      ov.remove();
-      flipping = false;
-    }, 720);
+    turnTimer = setTimeout(() => { Promise.resolve().then(turn).catch(console.error); }, 300);
+    finishTimer = setTimeout(finish, 720);
   }
 
   /* En défilement vertical (n°3), pas d'animation de feuille : le
@@ -479,6 +470,7 @@ NC.reader = (() => {
     drawerKind = kind;
     const body = $('#drawer-body');
     body.innerHTML = '';
+    body.removeAttribute('aria-busy');
     /* Export des citations (n°11) : le bouton n'existe que dans le
        tiroir Soulignages & notes — renderNotes le retire encore s'il
        n'y a rien à exporter. */
@@ -487,7 +479,11 @@ NC.reader = (() => {
     if (kind === 'search') { $('#drawer-title').textContent = 'Recherche'; renderSearch(body); }
     if (kind === 'notes') { $('#drawer-title').textContent = 'Soulignages & notes'; renderNotes(body); }
     if (kind === 'history') { $('#drawer-title').textContent = 'Passages'; renderHistory(body); }
-    if (kind === 'stats') { $('#drawer-title').textContent = 'Statistiques'; renderStats(body); }
+    if (kind === 'stats') {
+      $('#drawer-title').textContent = 'Statistiques';
+      const book = current;
+      NC.statsDashboard.renderBook(body, book, () => drawerKind === 'stats' && current === book && !body.closest('[hidden]'), readingTracker.pause());
+    }
     NC.modal.show($('#drawer'), {
       backdrop: $('#drawer-backdrop'), initial: kind === 'search' ? body.querySelector('input') : $('#drawer-close'),
       dismiss: () => {
@@ -903,122 +899,35 @@ NC.reader = (() => {
     }
   }
 
-  /* ── Statistiques de lecture (V2.12) ────────────────────────────
-     Deux compteurs par livre et par jour, écrits en base par petites
-     additions (get → additionner → put : les sessions d'un même jour
-     se cumulent, jamais d'écrasement) :
-     • le TEMPS actif — onglet visible, livre ouvert, et une activité
-       (tourne-page, souris, clavier…) dans les trois dernières minutes ;
-     • les PAGES LUES — chaque page affichée en mode pages (une vue
-       double en compte deux ; en défilement vertical l'unité de page
-       n'existe plus : le temps seul fait foi).
-     Le crédit avance par tranches de 5 s ; l'écriture en base toutes
-     les ~30 s et à chaque pause (onglet caché, fermeture d'un livre,
-     fermeture de l'onglet). Rien ne grossit sans fin : un agrégat par
-     jour, quelques dizaines d'octets — et tout disparaît avec le livre. */
-  function noteActivity() {
-    if (statsBookId && !document.hidden) statsLastActivity = Date.now();
-  }
-
-  /* Compte les pages de la position courante. Anti-doublon : une même
-     page re-rendue par epub.js (relocation fantôme, zoom, resize) ne
-     recompte pas — seule une position NOUVELLE crédite ses pages. */
+  /* Unité historique de présentation, distincte des pages physiques et
+     du temps actif. Une recomposition actualise seulement le repère. */
   function statsNotePosition(loc, count = true) {
-    if (!ctl || !current || !statsBookId) return;
-    noteActivity();
-    let pages = 0;
-    let key = '';
+    if (!ctl) return;
     if (ctl.type === 'pdf') {
-      const p = (loc && loc.page) || ctl.page;
-      const e = (loc && loc.end) || (ctl.spread === 'always'
-        ? Math.min(p + 1, (ctl.doc && ctl.doc.numPages) || p) : p);
-      if (p >= 1) { pages = Math.max(1, Math.min(STATS_MAX_PAGES, e - p + 1)); key = 'p' + p + ':' + e; }
-    } else if (ctl.flow !== 'scrolled') {
-      const L = loc || ctl.location;
-      if (L && L.start && L.start.displayed && L.start.displayed.page) {
-        const s = L.start.displayed.page;
-        const e = (L.end && L.end.displayed && L.end.displayed.page >= s) ? L.end.displayed.page : s;
-        pages = Math.max(1, Math.min(STATS_MAX_PAGES, e - s + 1));
-        let secIdx = '?';
-        try { const sec = ctl.book.spine.get(L.start.cfi); if (sec) secIdx = sec.index; } catch (err) {}
-        key = 'e' + secIdx + ':' + s;
-      }
+      const page = loc?.page || ctl.page;
+      const end = loc?.end || page;
+      readingTracker.position('p' + page + ':' + end, Math.min(4, end - page + 1), count);
+      return;
     }
-    if (key && key !== statsPageKey) {
-      statsPageKey = key;
-      if (count) statsPendingPages += pages;
+    if (ctl.flow === 'scrolled') return;
+    const location = loc || ctl.location;
+    const start = location?.start?.displayed?.page;
+    if (!start) return;
+    const end = Math.max(start, location.end?.displayed?.page || 0);
+    readingTracker.position('e' + location.start.index + ':' + start + ':' + end, Math.min(4, end - start + 1), count);
+  }
+
+  let lastWheel = -Infinity;
+  function readingGesture(event) {
+    if (!event.isTrusted) return;
+    if (event.type === 'keydown' && !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ', 'Enter'].includes(event.key)) return;
+    if (event.type === 'wheel') {
+      const now = performance.now();
+      if (now - lastWheel < 500) return;
+      lastWheel = now;
     }
+    readingTracker.interact();
   }
-
-  function statsTick() {
-    const now = Date.now();
-    const elapsed = now - statsLastTick;
-    statsLastTick = now;
-    if (!statsBookId || document.hidden) return; // onglet caché : rien ne compte
-    if (elapsed <= 0 || elapsed > STATS_MAX_SLICE_MS) return; // sommeil / saut d'horloge
-    if (now - statsLastActivity > STATS_IDLE_MS) return; // livre ouvert, lecteur parti
-    statsPendingSec += elapsed / 1000;
-    if (++statsTickN % STATS_FLUSH_TICKS === 0) flushStats(statsBookId);
-  }
-
-  async function flushStats(bookId) {
-    if (!bookId) return;
-    /* La lecture du reliquat est SYNCHRONE (avant le premier await) :
-       les appels en cascade (fermeture → ouverture d'un autre livre)
-       ne mélangent jamais les compteurs de deux livres. */
-    const sec = Math.round(statsPendingSec);
-    const pg = Math.round(statsPendingPages);
-    statsPendingSec -= sec;
-    statsPendingPages -= pg;
-    if (sec || pg) {
-      const date = NC.todayKey();
-      const now = Date.now();
-      queueStats({ id: bookId + '|' + date, bookId, date, seconds: sec, pages: pg, firstAt: now, lastAt: now });
-    }
-    const pending = Array.from(statsRetry.values());
-    statsRetry.clear();
-    await Promise.all(pending.map((sample) => NC.db.addReadStat(sample).catch((err) => {
-      console.warn('Statistiques de lecture en attente', err);
-      queueStats(sample);
-    })));
-  }
-
-  function queueStats(sample) {
-    const prior = statsRetry.get(sample.id);
-    if (prior) {
-      prior.seconds += sample.seconds;
-      prior.pages += sample.pages;
-      prior.firstAt = Math.min(prior.firstAt, sample.firstAt);
-      prior.lastAt = Math.max(prior.lastAt, sample.lastAt);
-    } else {
-      statsRetry.set(sample.id, sample);
-    }
-  }
-
-  function startStatsTracking(bookId) {
-    if (statsBookId === bookId) return;
-    if (statsBookId) {
-      const old = statsBookId;
-      statsBookId = null; // le tick s'arrête pendant la bascule
-      flushStats(old);
-    }
-    statsBookId = bookId;
-    statsPageKey = '';
-    statsTickN = 0; // cadence d'écriture alignée sur le début de la session
-    statsLastActivity = Date.now();
-    statsLastTick = Date.now();
-    if (!statsTimer) statsTimer = setInterval(statsTick, STATS_TICK_MS);
-  }
-
-  function stopStatsTracking() {
-    if (!statsBookId) return;
-    const bookId = statsBookId;
-    statsBookId = null;
-    statsPageKey = '';
-    if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
-    flushStats(bookId); // écrit le reliquat, même quelques secondes
-  }
-
   async function renderHistory(body) {
     body.innerHTML = '';
     let items = [];
@@ -1098,171 +1007,6 @@ NC.reader = (() => {
      derniers jours, les totaux par période (aujourd'hui / 7 j / 30 j /
      depuis le début) et le total tous livres. Tout est lu dans le
      magasin « readstats » — rien n'est recalculé à la volée. */
-  function sumReadStats(rows, fromDate) {
-    let sec = 0, pages = 0, days = 0;
-    for (const r of rows) {
-      if (fromDate && r.date < fromDate) continue; // clés ISO : l'ordre alphabétique est l'ordre du temps
-      sec += r.seconds || 0;
-      pages += r.pages || 0;
-      if ((r.seconds || 0) > 0 || (r.pages || 0) > 0) days++;
-    }
-    return { sec, pages, days };
-  }
-
-  /* Série de jours de lecture d'affilée : aujourd'hui, sinon hier —
-     une journée à peine commencée ne casse pas la série d'hier. */
-  function statStreak(rows) {
-    const set = new Set(rows
-      .filter((r) => (r.seconds || 0) > 0 || (r.pages || 0) > 0)
-      .map((r) => r.date));
-    const d = new Date();
-    if (!set.has(NC.dateKey(d))) d.setDate(d.getDate() - 1);
-    let n = 0;
-    while (set.has(NC.dateKey(d))) { n++; d.setDate(d.getDate() - 1); }
-    return n;
-  }
-
-  async function renderStats(body) {
-    body.innerHTML = '';
-    let rows = [];
-    try { rows = await NC.db.readStatsFor(current.id); } catch (e) { console.error(e); }
-    if (!rows.length) {
-      const empty = document.createElement('p');
-      empty.className = 'drawer-empty';
-      empty.append("Aucune statistique pour l'instant.", document.createElement('br'));
-      empty.append("Elles s'inscrivent toutes seules dès vos premières pages tournées.");
-      body.appendChild(empty);
-      return;
-    }
-
-    const total = sumReadStats(rows);
-    const streak = statStreak(rows);
-    const todayKey = NC.todayKey();
-
-    /* Trois grands chiffres */
-    const mkCard = (val, key) => {
-      const c = document.createElement('div');
-      c.className = 'stat-card';
-      const v = document.createElement('span');
-      v.className = 'stat-val';
-      v.textContent = val;
-      const k = document.createElement('span');
-      k.className = 'stat-key';
-      k.textContent = key;
-      c.append(v, k);
-      return c;
-    };
-    const cards = document.createElement('div');
-    cards.className = 'stat-cards';
-    cards.append(
-      mkCard(NC.fmtDur(total.sec), 'Temps de lecture'),
-      mkCard(String(total.pages), 'Pages lues'),
-      mkCard(String(total.days), 'Jours de lecture')
-    );
-    body.appendChild(cards);
-
-    /* Moyenne par jour de lecture + série */
-    const sub = document.createElement('p');
-    sub.className = 'stat-sub';
-    const bits = [];
-    if (total.days) bits.push(`Moyenne ${NC.fmtDur(total.sec / total.days)} et ${Math.max(1, Math.round(total.pages / total.days))} pages par jour de lecture`);
-    if (streak > 1) bits.push(`série : ${streak} jours d'affilée`);
-    else if (streak === 1) bits.push('série : 1 jour — continuez demain');
-    if (bits.length) sub.textContent = bits.join(' · ');
-    else sub.hidden = true;
-    body.appendChild(sub);
-
-    /* Graphique : les 14 derniers jours (barre = temps du jour) */
-    const byDay = new Map(rows.map((r) => [r.date, r]));
-    const days = [];
-    for (let i = 13; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      days.push(NC.dateKey(d));
-    }
-    const maxSec = Math.max(60, ...days.map((k) => (byDay.get(k) || {}).seconds || 0));
-    const chart = document.createElement('div');
-    chart.className = 'stat-chart';
-    for (const k of days) {
-      const row = byDay.get(k);
-      const col = document.createElement('div');
-      col.className = 'stat-col' + (k === todayKey ? ' today' : '');
-      const wrap = document.createElement('div');
-      wrap.className = 'stat-bar-wrap';
-      if (row && (row.seconds || 0) > 0) {
-        const bar = document.createElement('div');
-        bar.className = 'stat-bar';
-        bar.style.height = Math.max(4, Math.round(((row.seconds || 0) / maxSec) * 100)) + '%';
-        wrap.appendChild(bar);
-      } else {
-        const dot = document.createElement('div');
-        dot.className = 'stat-dot';
-        wrap.appendChild(dot);
-      }
-      const day = document.createElement('span');
-      day.className = 'stat-day';
-      day.textContent = NC.dayNum(k); // numéro seul : 14 colonnes tiennent sans se chevaucher
-      const pg = document.createElement('span');
-      pg.className = 'stat-pages';
-      pg.textContent = row && row.pages ? String(row.pages) : '';
-      col.title = NC.dayLabelKey(k) + (row
-        ? ` — ${NC.fmtDur(row.seconds)} · ${row.pages || 0} page${(row.pages || 0) > 1 ? 's' : ''}`
-        : ' — pas de lecture');
-      col.append(wrap, day, pg);
-      chart.appendChild(col);
-    }
-    body.appendChild(chart);
-
-    /* Totaux par période */
-    const week = new Date(); week.setDate(week.getDate() - 6);
-    const month = new Date(); month.setDate(month.getDate() - 29);
-    const mkRange = (label, agg) => {
-      const c = document.createElement('div');
-      c.className = 'stat-range';
-      const v = document.createElement('span');
-      v.className = 'stat-range-val';
-      v.textContent = agg.sec ? NC.fmtDur(agg.sec) : '—';
-      const p = document.createElement('span');
-      p.className = 'stat-range-pages';
-      p.textContent = agg.pages ? agg.pages + ' p.' : ' ';
-      const k = document.createElement('span');
-      k.className = 'stat-range-key';
-      k.textContent = label;
-      c.append(v, p, k);
-      return c;
-    };
-    const ranges = document.createElement('div');
-    ranges.className = 'stat-ranges';
-    ranges.append(
-      mkRange("Aujourd'hui", sumReadStats(rows, todayKey)),
-      mkRange('7 jours', sumReadStats(rows, NC.dateKey(week))),
-      mkRange('30 jours', sumReadStats(rows, NC.dateKey(month))),
-      mkRange('Total', total)
-    );
-    body.appendChild(ranges);
-
-    /* Tous les livres */
-    try {
-      const agg = sumReadStats(await NC.db.allReadStats());
-      if (agg.sec > 0 || agg.pages > 0) {
-        const glob = document.createElement('p');
-        glob.className = 'stat-global';
-        glob.append('Tous les livres : ');
-        const b = document.createElement('strong');
-        b.textContent = NC.fmtDur(agg.sec);
-        glob.appendChild(b);
-        glob.append(` · ${agg.pages} pages · ${agg.days} ${agg.days > 1 ? 'jours' : 'jour'} de lecture`);
-        body.appendChild(glob);
-      }
-    } catch (e) { console.error(e); }
-
-    /* Mode d'emploi discret : comment le temps se compte */
-    const how = document.createElement('p');
-    how.className = 'stat-how';
-    how.textContent = "Le temps se compte pendant la lecture — onglet visible, tourne-page, souris ou clavier — et s'endort après trois minutes d'inactivité. En défilement vertical, le temps seul fait foi : l'unité de page n'existe plus.";
-    body.appendChild(how);
-  }
-
   /* ── Recherche ── */
   function renderSearch(body) {
     const row = document.createElement('div');
@@ -2282,7 +2026,6 @@ NC.reader = (() => {
     NC.db.putSetting('spread', mode).catch(() => {});
     $('#spine-line').hidden = mode !== 'always';
     updateSpreadBtn();
-    if (ctl.type === 'pdf') onRelocated({ page: ctl.page, end: Math.min(ctl.page + (mode === 'always' ? 1 : 0), ctl.doc.numPages), numPages: ctl.doc.numPages });
   }
 
   /* ── Capture ── */
@@ -2336,11 +2079,12 @@ NC.reader = (() => {
 
   /* ── Fermeture ── */
   async function close(silent) {
+    finishFlip?.();
     const bookId = current?.id;
     const returnToNotebook = notebookVisit;
     openGen++; // toute ouverture encore en vol devient périmée
     endVisit(); // clôture le passage en cours (s'il a assez vécu) — n°9
-    stopStatsTracking(); // arrête le chronomètre et écrit le reliquat — V2.12
+    await readingTracker.stop();
     if (ctl) {
       await readingQueue;
       await ctl.layoutSettled?.();
@@ -2624,7 +2368,7 @@ NC.reader = (() => {
 
     // clic sur les bords du livre → tourner la page
     $('#book-frame').addEventListener('click', (e) => {
-      if (!ctl || flipping) return;
+      if (!ctl || finishFlip) return;
       // jamais de tourne-page sur un élément d'interface : boutons du haut,
       // popups, liens — un clic d'outil ne doit JAMAIS tourner la page
       if (e.target.closest && e.target.closest('button, a, input, select, textarea, label, #sel-popup, #font-pop')) return;
@@ -2653,26 +2397,25 @@ NC.reader = (() => {
         /* Historique (n°9) : clôture la visite — le temps passé onglet
            caché ne doit pas compter dans la durée du séjour. */
         endVisit();
-        /* Statistiques (V2.12) : écrit le reliquat — le temps onglet
-           caché ne comptera pas non plus (les ticks s'arrêtent). */
-        flushStats(statsBookId);
-      } else if (statsBookId) {
-        statsLastTick = Date.now(); // reprise : aucun crédit rétroactif
+        readingTracker.pause();
       }
     });
-    window.addEventListener('beforeunload', () => {
+    window.addEventListener('pagehide', () => {
       if (ctl) { ctl.saveProgress(); endVisit(); }
-      flushStats(statsBookId); // au pire, une perte de ≤ 30 s
+      readingTracker.pause();
     });
-
-    /* Statistiques (V2.12) : toute activité dans la page réarme le
-       crédit du temps. Les événements à l'intérieur des iframes EPUB
-       n'arrivent pas ici — les tourne-pages les signalent déjà via
-       statsNotePosition(). */
-    ['pointerdown', 'mousemove', 'wheel', 'touchstart', 'keydown'].forEach((ev) => {
-      document.addEventListener(ev, noteActivity, { passive: true });
+    window.addEventListener('blur', () => {
+      // Entrer dans l’iframe EPUB laisse le document parent au premier plan.
+      setTimeout(() => { if (!document.hasFocus()) readingTracker.pause(); }, 0);
     });
-
+    for (const event of ['pointerdown', 'wheel', 'keydown', 'touchstart']) {
+      document.addEventListener(event, (e) => {
+        if (e.target.closest?.('#stage, #progress, #nav-prev, #nav-next, .toc-item, .thumb-cell, .bm-item, .hist-item')) readingGesture(e);
+      }, { capture: true, passive: true });
+    }
+    NC.db.onNotebookChange((change) => {
+      if (change.replace || (change.deleted && change.deleted === current?.id)) readingTracker.stop();
+    });
     /* Gestes tactiles (V2.17) : balayages, zones de tap et pinch sur
        la zone de lecture. Le câblage des iframes EPUB se fait de leur
        côté (hook content → NC.touch.wireContent). */
@@ -2682,20 +2425,16 @@ NC.reader = (() => {
   return {
     init, open, close, goNext, goPrev,
     onContentKey: (event) => handleReadingKey?.(event, true),
+    onReadingGesture: readingGesture,
     closeReadingPop, changeFontSize,
     toggleChrome, showChrome, // mode immersion (V2.17, tap central du tactile)
     _state: () => ({ ctl, current }),
     /* Crochets de test / diagnostic (V2.12) : état du suivi, seuil
        d'inactivité (les tests ne peuvent pas attendre 3 min), flush
        forcé. Aucun effet de bord en usage normal. */
-    _statsState: () => ({
-      book: statsBookId,
-      pendingSec: Math.round(statsPendingSec),
-      pendingPages: statsPendingPages,
-      key: statsPageKey,
-    }),
-    _statsIdle: (ms) => { if (ms > 0) STATS_IDLE_MS = ms; },
-    _statsFlush: () => flushStats(statsBookId),
+    _statsState: readingTracker.state,
+    _statsIdle: readingTracker.setIdle,
+    _statsFlush: () => { readingTracker.tick(); return readingTracker.flush(); },
     /* Crochet de test (V2.14) : statut courant du livre ouvert. */
     _statusState: () => ({ status: statusNow }),
   };
