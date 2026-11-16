@@ -630,6 +630,28 @@ body[data-book-theme="sepia"] .thumb-frame{ filter:sepia(.38) saturate(1.08) bri
    Même langage visuel que les options du popover thème ; la valeur
    courante est cerclée d'or (.current). */
 #font-pop{ min-width:250px; }
+#font-pop:has(.reading-profiles){ width:min(350px, calc(100vw - 24px)); }
+.reading-profiles{ padding-bottom:12px; border-bottom:1px solid var(--line-soft); }
+.profile-row{ display:flex; flex-wrap:wrap; align-items:end; gap:8px; }
+.profile-choice{ flex:1 1 140px; min-width:0; }
+.reading-profiles label, .profile-layout label{ display:grid; gap:4px; color:var(--ink); font-size:12px; }
+.reading-profiles :is(select, input[type="text"]), .profile-layout select{
+  min-width:0; width:100%; min-height:44px; padding:5px 8px; border:1px solid var(--line);
+  border-radius:5px; color:var(--ink); background:var(--panel); font:inherit;
+}
+.reading-profiles button{ min-height:44px; }
+.reading-profiles .profile-session{ display:flex; align-items:center; gap:8px; min-height:44px; }
+.profile-session input{ width:18px; height:18px; accent-color:var(--gold); }
+.profile-current, .profile-help, .profile-message{ margin:6px 0; font-size:12px; line-height:1.45; overflow-wrap:anywhere; }
+.profile-current{ color:var(--ink); }
+.profile-help{ color:var(--ink-dim); }
+.profile-message:empty{ margin:0; }
+.profile-message{ color:var(--gold); }
+.reading-profiles summary{ cursor:pointer; min-height:44px; line-height:44px; color:var(--ink); }
+.profile-actions, .profile-confirm{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.profile-confirm p{ width:100%; }
+.profile-layout{ margin:12px 0 0; padding:6px 0 0; border:0; display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; }
+.profile-layout legend{ font-size:13px; padding:0; }
 .typo-grid{ display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:4px; }
 .typo-opt{
   padding:8px 9px; border-radius:8px; border:1px solid var(--line);

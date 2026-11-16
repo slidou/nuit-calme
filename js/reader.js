@@ -11,6 +11,11 @@ NC.reader = (() => {
   let notebookVisit = null;
   let flipping = false;
   let bookTheme = 'paper'; // thème du CONTENU du livre (papier | nuit) — indépendant du site
+  let legacyReading;
+  let readingState;
+  let sessionReading = null;
+  let readingQueue = Promise.resolve();
+  let profilePanel;
   let focusMode = false;   // mode concentration (ajout n°5)
   let lastHighlightColor = NC.HIGHLIGHT_DEFAULT; // dernière couleur de soulignement (n°8)
   let draggingBar = false; // le curseur de progression est tenu : on ne lui reprend pas la main
@@ -123,11 +128,11 @@ NC.reader = (() => {
        → dernier réglage utilisé (global) → défaut. normalizeTypo garantit
        des valeurs saines même si un enregistrement ancien est incomplet. */
     const lastTypo = await NC.db.getSetting('lastTypo', null);
-    const wantedTypo = NC.normalizeTypo(Object.assign(
+    const wantedTypo = Object.assign(
       {},
       (lastTypo && typeof lastTypo === 'object') ? lastTypo : {},
       (prefsRec && prefsRec.typo && typeof prefsRec.typo === 'object') ? prefsRec.typo : {}
-    ));
+    );
 
     /* Reprise EPUB : la progression (CFI, taille de police, %) vit dans le
        magasin « progress » — c'est LÀ qu'il faut la relire. rec.lastCfi /
@@ -146,7 +151,7 @@ NC.reader = (() => {
          (module centralisé). L'ancienne valeur y est recopiée une seule fois. */
       if (prefsRec && prefsRec.fontSize) {
         epubFont = prefsRec.fontSize;
-      } else if (!preview && epubFont !== 100) {
+      } else if (!prefsRec?.reading && !preview && epubFont !== 100) {
         NC.db.patchPrefs(rec.id, { fontSize: epubFont }).catch(() => {});
       }
     }
@@ -176,10 +181,17 @@ NC.reader = (() => {
 
     if (gen !== openGen) return; // annulé pendant la lecture des préférences
 
+    readingState = prefsRec?.reading || null;
+    sessionReading = null;
+    legacyReading = NC.profiles.normalize({ typo: wantedTypo, fontSize: epubFont, theme: bookTheme, flow: prefsRec?.flow || flow });
+    const effective = NC.profiles.effective(readingState, legacyReading);
+    bookTheme = effective.theme;
+    document.body.dataset.bookTheme = bookTheme;
+
     let newCtl;
     try {
       newCtl = rec.type === 'epub'
-        ? await NC.openEpub(rec, { spread, flow, lastCfi, fontSize: epubFont, theme: bookTheme, typo: wantedTypo, preview })
+        ? await NC.openEpub(rec, { ...effective, spread, lastCfi, legacyFontSize: epubFont, preview })
         : await NC.openPdf(rec, { spread, lastPage: pdfLastPage, zoom: pdfZoom, fit: pdfFit, theme: bookTheme, preview });
     } catch (err) {
       console.error(err);
@@ -221,7 +233,7 @@ NC.reader = (() => {
     }
     updateSpreadBtn();
     applyBookThemeUi(bookTheme);
-    $('#btn-flow').hidden = rec.type !== 'epub'; // défilement vertical : EPUB seulement
+    $('#btn-flow').hidden = rec.type !== 'epub' || ctl.fixedLayout;
     updateFlowUi();
 
     /* Mode concentration : réglage GLOBAL (préférence de session de
@@ -249,12 +261,12 @@ NC.reader = (() => {
       });
       ctl.saveProgress(); // lastOpened + page courante, quelques octets seulement
     }
-    else if (preview && ctl.location?.start) onRelocated(ctl.location);
+    else if (ctl.location?.start) onRelocated(ctl.location);
     return true;
   }
 
   /* ── Événements de position ── */
-  function onRelocated(loc) {
+  function onRelocated(loc, layoutOnly = false) {
     if (!ctl) return;
     if (draggingBar) return; // le lecteur ne pique pas le curseur pendant un glissement
     let label = '';
@@ -268,8 +280,8 @@ NC.reader = (() => {
       let idx = 0;
       try { const sec = ctl.book.spine.get(loc.start.cfi); if (sec) idx = sec.index; } catch (e) {}
       posTxt = chapter ? `${chapter}` : (idx ? `Chapitre ${idx}` : '');
-      if (ctl.locationsReady && typeof loc.start.percentage === 'number' && isFinite(loc.start.percentage)) {
-        pct = loc.start.percentage;
+      if (ctl.locationsReady) {
+        pct = ctl.percent();
         /* En défilement vertical (n°3), « page N » du chapitre n'a pas
            de sens : le suffixe n'est posé qu'en mode pages. */
         if (ctl.flow !== 'scrolled') {
@@ -295,7 +307,8 @@ NC.reader = (() => {
     /* Historique (n°9) : chaque position tenue laisse une trace.
        Marque-page (n°8) : l'état du bouton suit la position. */
     updateBookmarkBtn();
-    if (!notebookVisit) {
+    if (!notebookVisit && layoutOnly) statsNotePosition(loc, false);
+    if (!notebookVisit && !layoutOnly) {
       trackPosition();
       statsNotePosition(loc);
       maybeMarkFinished(loc);
@@ -407,6 +420,7 @@ NC.reader = (() => {
     const pop = $(`#${kind}-pop`);
     if (pop.hidden) return false;
     pop.hidden = true;
+    if (kind === 'font') profilePanel = null;
     const button = $(`#btn-${kind}`);
     button.setAttribute('aria-expanded', 'false');
     if (restore) NC.focus(button, $('#stage'));
@@ -420,7 +434,20 @@ NC.reader = (() => {
     pop.hidden = false;
     button.setAttribute('aria-expanded', 'true');
     NC.placePopover(pop, anchor);
-    NC.focus(pop.querySelector('[aria-pressed="true"]'), pop.querySelector('button'));
+    NC.focus(pop.querySelector('select, [aria-pressed="true"]'), pop.querySelector('button'));
+  }
+
+  function alignReadingPops() {
+    for (const kind of ['font', 'theme']) {
+      const panel = $(`#${kind}-pop`);
+      if (panel.hidden) continue;
+      NC.placePopover(panel, $(`#btn-${kind}`).getBoundingClientRect());
+      if (!panel.contains(document.activeElement)) continue;
+      const focus = document.activeElement.getBoundingClientRect();
+      const bounds = panel.getBoundingClientRect();
+      if (focus.bottom > bounds.bottom - 8) panel.scrollTop += focus.bottom - bounds.bottom + 8;
+      else if (focus.top < bounds.top + 8) panel.scrollTop -= bounds.top + 8 - focus.top;
+    }
   }
 
   function hideTransient() {
@@ -896,7 +923,7 @@ NC.reader = (() => {
   /* Compte les pages de la position courante. Anti-doublon : une même
      page re-rendue par epub.js (relocation fantôme, zoom, resize) ne
      recompte pas — seule une position NOUVELLE crédite ses pages. */
-  function statsNotePosition(loc) {
+  function statsNotePosition(loc, count = true) {
     if (!ctl || !current || !statsBookId) return;
     noteActivity();
     let pages = 0;
@@ -919,7 +946,7 @@ NC.reader = (() => {
     }
     if (key && key !== statsPageKey) {
       statsPageKey = key;
-      statsPendingPages += pages;
+      if (count) statsPendingPages += pages;
     }
   }
 
@@ -1870,13 +1897,127 @@ NC.reader = (() => {
   }
 
   /* ── Taille du texte / zoom ── */
+  const restrictedTypography = (reader = ctl) => reader?.type !== 'epub' || reader.fixedLayout;
+  const appliedReading = () => NC.profiles.normalize(NC.profiles.overlay(
+    NC.profiles.effective(readingState, legacyReading), sessionReading));
+
+  function withReadingControls(operation) {
+    const reader = ctl;
+    const id = current?.id;
+    const generation = openGen;
+    const result = readingQueue.then(() => {
+      if (reader && generation === openGen && reader === ctl) return operation(reader, id);
+    });
+    readingQueue = result.catch(() => {});
+    return result;
+  }
+
+  async function renderReading(reader, settings, persisted) {
+    bookTheme = settings.theme;
+    try {
+      if (reader.applyReading) await reader.applyReading(settings);
+      else reader.setTheme(settings.theme);
+    } catch (error) {
+      NC.toast(persisted ? 'Les réglages sont enregistrés. Rouvrez le livre si l’affichage reste incomplet.'
+        : 'Le passage n’a pas pu être recalé.', 'error');
+    }
+    if (reader !== ctl) return;
+    applyBookThemeUi(bookTheme);
+    updateFlowUi();
+    syncTypographyUi();
+    profilePanel?.sync();
+  }
+
+  async function commitReading(reader, id, change, resetSession) {
+    const expect = readingState?.binding;
+    let legacyChange;
+    let row;
+    try {
+      row = await NC.db.updateReadingPrefs(id, (prefs) => {
+        if (prefs.reading?.binding !== expect) {
+          throw new DOMException('Les réglages du livre ont changé dans un autre onglet. Rouvrez le livre.', 'InvalidStateError');
+        }
+        const result = change(prefs);
+        legacyChange = result.legacy;
+        return result.fields;
+      });
+      if (!row) throw new Error('Ce livre a été retiré de la bibliothèque.');
+    } catch (error) {
+      NC.toast(error.name === 'InvalidStateError' ? error.message : 'Impossible d’enregistrer les réglages de ce livre.', 'error');
+      syncTypographyUi();
+      return;
+    }
+    if (reader !== ctl) return;
+    readingState = row.reading || null;
+    if (resetSession) sessionReading = null;
+    if (legacyChange) {
+      legacyReading = NC.profiles.normalize(NC.profiles.overlay(legacyReading, {
+        theme: row.theme || legacyReading.theme, flow: row.flow || legacyReading.flow,
+        fontSize: row.fontSize || legacyReading.fontSize, typo: row.typo,
+      }));
+      reader.legacyFontSize = legacyReading.fontSize;
+    }
+    await renderReading(reader, appliedReading(), true);
+  }
+
+  function toggleSessionReading(enabled) {
+    return withReadingControls(async (reader) => {
+      sessionReading = enabled ? {} : null;
+      await renderReading(reader, appliedReading(), false);
+    });
+  }
+
+  function editReading(patch) {
+    return withReadingControls(async (reader, id) => {
+      if (notebookVisit || sessionReading) {
+        const update = typeof patch === 'function' ? patch(appliedReading()) : patch;
+        sessionReading = NC.profiles.overlay(sessionReading, update);
+        await renderReading(reader, appliedReading(), false);
+        return;
+      }
+      await commitReading(reader, id, (prefs) => {
+        const update = typeof patch === 'function' ? patch(NC.profiles.effective(prefs.reading, {
+          ...legacyReading, fontSize: prefs.fontSize || legacyReading.fontSize, flow: prefs.flow || legacyReading.flow,
+        })) : patch;
+        return prefs.reading
+          ? { fields: { reading: { ...prefs.reading, overrides: NC.profiles.overlay(prefs.reading.overrides, update) } } }
+          : { fields: NC.profiles.overlay(prefs, update), legacy: true };
+      });
+    });
+  }
+
+  const changeFontSize = (value) => restrictedTypography() ? Promise.resolve() :
+    editReading({ fontSize: Math.max(80, Math.min(170, value)) });
+  const stepFontSize = (step) => editReading(({ fontSize }) => ({ fontSize: Math.max(80, Math.min(170, fontSize + step)) }));
+
+  function bindProfile(profile) {
+    return withReadingControls((reader, id) => commitReading(reader, id, (prefs) => {
+      const previous = prefs.reading ? { profile: prefs.reading.profile, overrides: prefs.reading.overrides }
+        : { profile: null, overrides: legacyReading };
+      return { fields: { reading: NC.profiles.bind(profile, previous) } };
+    }, true));
+  }
+
+  function undoReading(reset) {
+    return withReadingControls((reader, id) => commitReading(reader, id, ({ reading }) => {
+      if (!reading) return { fields: {} };
+      if (reset) return { fields: { reading: { ...reading, overrides: {} } } };
+      if (!reading.previous) return { fields: { reading: null } };
+      return { fields: { reading: { ...NC.profiles.bind(reading.previous.profile), overrides: reading.previous.overrides } } };
+    }, true));
+  }
+
   function toggleFontPop() {
     if (!ctl) return; // bouton visible pendant une ouverture : pas encore de contrôleur
     if (closeReadingPop('font', true)) return;
     closeReadingPop('theme');
     const body = $('#font-pop-body');
     body.innerHTML = '';
-    if (ctl.type === 'epub') {
+    if (!notebookVisit) profilePanel = NC.profilePanel(body, {
+      restricted: restrictedTypography(), current: appliedReading, state: () => readingState,
+      session: () => sessionReading, toggleSession: toggleSessionReading, apply: bindProfile, undo: undoReading,
+    });
+    if (!restrictedTypography()) {
       const h = document.createElement('h4');
       h.textContent = 'Taille du texte';
       const row = document.createElement('div');
@@ -1887,13 +2028,14 @@ NC.reader = (() => {
       minus.title = 'Réduire le texte';
       const val = document.createElement('div');
       val.className = 'font-val'; val.textContent = ctl.fontSize + ' %';
+      val.id = 'epub-font-value';
+      val.setAttribute('aria-live', 'polite');
       const plus = document.createElement('button');
       plus.className = 'font-btn'; plus.type = 'button'; plus.textContent = 'A+';
       plus.setAttribute('aria-label', 'Augmenter la taille du texte');
       plus.title = 'Agrandir le texte';
-      const update = (v) => { val.textContent = v + ' %'; };
-      minus.addEventListener('click', () => update(ctl.setFontSize(ctl.fontSize - 10)));
-      plus.addEventListener('click', () => update(ctl.setFontSize(ctl.fontSize + 10)));
+      minus.addEventListener('click', () => stepFontSize(-10));
+      plus.addEventListener('click', () => stepFontSize(10));
       row.append(minus, val, plus);
       body.append(h, row);
 
@@ -1942,8 +2084,8 @@ NC.reader = (() => {
         gJ.appendChild(b);
       }
       body.append(hF, gF, hL, gL, hJ, gJ);
-      markTypoChips();
-    } else {
+      addLayoutControls(body);
+    } else if (ctl.type === 'pdf') {
       const h = document.createElement('h4');
       h.textContent = 'Zoom de la page';
       const row = document.createElement('div');
@@ -1991,18 +2133,51 @@ NC.reader = (() => {
         gF.appendChild(b);
       }
       body.append(hF, gF);
+    } else {
+      const note = document.createElement('p');
+      note.className = 'profile-help';
+      note.textContent = 'Cet EPUB utilise une mise en page fixe. La composition du livre est conservée.';
+      body.append(note);
     }
     showReadingPop('font');
-    markTypoChips();
+    syncTypographyUi();
+  }
+
+  function addLayoutControls(body) {
+    const section = document.createElement('fieldset');
+    section.className = 'profile-layout';
+    const legend = document.createElement('legend');
+    legend.textContent = 'Mise en page';
+    section.append(legend);
+    for (const [key, label, values] of [
+      ['width', 'Largeur du texte', NC.profiles.widths], ['margin', 'Marges', NC.profiles.margins],
+      ['paragraph', 'Paragraphes', NC.profiles.paragraphs], ['flow', 'Mode de lecture', { paginated: 'Pages', scrolled: 'Défilement' }],
+    ]) {
+      const field = document.createElement('label');
+      field.textContent = label;
+      const select = document.createElement('select');
+      select.dataset.layout = key;
+      for (const [value, title] of Object.entries(values)) select.add(new Option(title, value));
+      select.addEventListener('change', () => editReading(key === 'flow' ? { flow: select.value } : { typo: { [key]: select.value } }));
+      field.append(select);
+      section.append(field);
+    }
+    body.append(section);
   }
 
   /* État visuel des pastilles de typographie (n°2) : la valeur courante
      du livre est cerclée d'or. */
-  function markTypoChips() {
-    if (!ctl || ctl.type !== 'epub') return;
+  function syncTypographyUi() {
+    if (restrictedTypography()) return;
     const t = ctl.typo || NC.TYPO_DEFAULT;
     const root = $('#font-pop-body');
     if (!root) return;
+    const size = $('#epub-font-value');
+    if (size) size.textContent = ctl.fontSize + ' %';
+    NC.$$('select[data-layout]', root).forEach((select) => {
+      const key = select.dataset.layout;
+      select.value = key === 'flow' ? ctl.flow : t[key];
+    });
     NC.$$('.typo-opt', root).forEach((button) => {
       const active = button.dataset.typoFont === t.font || Number(button.dataset.typoLh) === t.lineHeight ||
         button.dataset.typoJust === t.justify;
@@ -2011,30 +2186,7 @@ NC.reader = (() => {
     });
   }
 
-  /* Choix de typographie (n°2) : application immédiate (ctl.setTypo),
-     mémorisation PAR LIVRE (prefs.typo) + repli global (lastTypo) —
-     même mécanique que le thème. */
-  async function chooseTypo(patch) {
-    if (!ctl || ctl.type !== 'epub') return;
-    let t;
-    try { t = ctl.setTypo(patch); }
-    catch (e) { console.error(e); return; }
-    markTypoChips();
-    try {
-      if (current) {
-        await NC.db.patchPrefs(current.id, { typo: patch });
-      }
-    } catch (e) { console.error(e); }
-    NC.db.putSetting('lastTypo', t).catch(() => {});
-    const bits = [];
-    if (patch && patch.font) bits.push('Police : ' + (NC.BOOK_FONTS[t.font] || NC.BOOK_FONTS.cormorant).label + '.');
-    if (patch && patch.lineHeight != null) {
-      const lh = NC.LINE_HEIGHTS.find((x) => x.value === t.lineHeight);
-      bits.push('Interlignage : ' + (lh ? lh.label.toLowerCase() : String(t.lineHeight).replace('.', ',')) + '.');
-    }
-    if (patch && patch.justify) bits.push(patch.justify === 'justify' ? 'Texte justifié.' : 'Alignement à gauche.');
-    if (bits.length) NC.toast(bits.join(' '), 'info', 1700);
-  }
+  const chooseTypo = (patch) => editReading({ typo: patch });
 
   function updateSpreadBtn() {
     $('#btn-spread').classList.toggle('active', ctl && ctl.spread === 'always');
@@ -2061,13 +2213,9 @@ NC.reader = (() => {
   }
 
   async function toggleFlow() {
-    if (!ctl || ctl.type !== 'epub') return;
-    const mode = ctl.flow === 'scrolled' ? 'paginated' : 'scrolled';
+    if (restrictedTypography()) return;
     hideTransient();
-    try { await ctl.setFlow(mode); } catch (e) { console.error(e); }
-    NC.db.putSetting('flow', mode).catch(() => {});
-    updateFlowUi();
-    NC.toast(mode === 'scrolled' ? 'Mode défilement vertical — faites défiler le texte.' : 'Mode pages — tournez comme un livre.', 'info', 2000);
+    await editReading(({ flow }) => ({ flow: flow === 'scrolled' ? 'paginated' : 'scrolled' }));
   }
 
   /* ── Thème du livre (papier / sépia / nuit / OLED) — par livre ── */
@@ -2086,17 +2234,7 @@ NC.reader = (() => {
 
   async function chooseTheme(mode) {
     if (!NC.BOOK_THEMES[mode]) return;
-    bookTheme = mode;
-    document.body.dataset.bookTheme = mode; // immédiat, y compris pour le PDF
-    if (current) {
-      try {
-        await NC.db.patchPrefs(current.id, { theme: mode });
-        NC.db.putSetting('lastBookTheme', mode).catch(() => {});
-      } catch (e) { console.error(e); }
-    }
-    if (ctl && typeof ctl.setTheme === 'function') ctl.setTheme(mode);
-    applyBookThemeUi(mode);
-    NC.toast('Thème ' + NC.BOOK_THEMES[mode].label + '.', 'info', 1600);
+    await editReading({ theme: mode });
   }
 
   /* Popover de choix du thème (même mécanique que le popover de police) */
@@ -2204,6 +2342,8 @@ NC.reader = (() => {
     endVisit(); // clôture le passage en cours (s'il a assez vécu) — n°9
     stopStatsTracking(); // arrête le chronomètre et écrit le reliquat — V2.12
     if (ctl) {
+      await readingQueue;
+      await ctl.layoutSettled?.();
       try { await ctl.saveProgress(); } catch (e) {}
       try { ctl.destroy(); } catch (e) {}
       ctl = null;
@@ -2284,6 +2424,10 @@ NC.reader = (() => {
     $('#btn-focus').addEventListener('click', toggleFocus);
     $('#btn-capture').addEventListener('click', capture);
     $('#btn-font').addEventListener('click', toggleFontPop);
+    NC.db.onProfilesChange(() => profilePanel?.refresh());
+    new ResizeObserver(alignReadingPops).observe($('#font-pop'));
+    window.visualViewport?.addEventListener('resize', alignReadingPops);
+    window.visualViewport?.addEventListener('scroll', alignReadingPops);
     $('#btn-fullscreen').addEventListener('click', toggleFullscreen);
     $('#btn-bookmark').addEventListener('click', toggleBookmark);
     $('#btn-history').addEventListener('click', () => drawerKind === 'history' ? closeDrawer() : openDrawer('history'));
@@ -2538,7 +2682,7 @@ NC.reader = (() => {
   return {
     init, open, close, goNext, goPrev,
     onContentKey: (event) => handleReadingKey?.(event, true),
-    closeReadingPop,
+    closeReadingPop, changeFontSize,
     toggleChrome, showChrome, // mode immersion (V2.17, tap central du tactile)
     _state: () => ({ ctl, current }),
     /* Crochets de test / diagnostic (V2.12) : état du suivi, seuil

@@ -241,7 +241,7 @@ NC.library = (() => {
       type: 'epub', cover: meta.cover || null,
       data: buf, size: buf.byteLength,
     });
-    await NC.db.putBook(rec);
+    await NC.db.putImportedBook(rec);
     if (!quiet) NC.toast(`« ${rec.title} » ajouté à la bibliothèque.`, 'success');
     return rec;
   }
@@ -267,7 +267,7 @@ NC.library = (() => {
       type: 'pdf', cover: meta.cover || null,
       data: buf, size: buf.byteLength,
     });
-    await NC.db.putBook(rec);
+    await NC.db.putImportedBook(rec);
     if (!quiet) NC.toast(`« ${rec.title} » ajouté à la bibliothèque.`, 'success');
     return rec;
   }

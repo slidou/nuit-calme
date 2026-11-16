@@ -365,9 +365,9 @@ NC.db = (() => {
     });
   }
 
-  function writeBooks(write) {
+  function writeBooks(write, stores = ['books']) {
     return open().then((db) => new Promise((resolve, reject) => {
-      const transaction = db.transaction(withCards(db, ['books']), 'readwrite');
+      const transaction = db.transaction(withCards(db, stores), 'readwrite');
       let result;
       let failure;
       transaction.oncomplete = () => resolve(result);
@@ -387,6 +387,9 @@ NC.db = (() => {
     onReaderChange: (listener) => catalogChannel?.addEventListener('message', (event) => {
       if (event.data?.notebook?.restored) listener(null);
       else if (event.data?.bookId !== undefined) listener(event.data.bookId);
+    }),
+    onProfilesChange: (listener) => catalogChannel?.addEventListener('message', ({ data }) => {
+      if (data?.profiles || data?.notebook?.restored) listener();
     }),
     onNotebookChange: (listener) => {
       notebookEvents.addEventListener('change', (event) => listener(event.detail));
@@ -462,7 +465,9 @@ NC.db = (() => {
             const request = store.get(row[store.keyPath]);
             request.onsuccess = () => {
               const local = request.result;
-              if (!local || (timestamp && (row[timestamp] || 0) > (local[timestamp] || 0))) {
+              if (name === 'settings' && row.key === NC.profiles?.key && local) {
+                write(store, { ...local, value: NC.profiles.merge(local.value, row.value) }, count);
+              } else if (!local || (timestamp && (row[timestamp] || 0) > (local[timestamp] || 0))) {
                 write(store, row, count);
               } else if (name === 'books') {
                 counts.booksKept++;
@@ -481,6 +486,14 @@ NC.db = (() => {
     getBook: (id) => reqToPromise('books', 'readonly', (s) => s.get(id)),
     putBook: (book) => notifyCatalog(writeBooks((t) => putBookRow(t, book)),
       () => ({ books: [notebookBook(book)] })),
+    putImportedBook: (book) => notifyCatalog(writeBooks((t, apply) => {
+      const request = t.objectStore('settings').get(NC.profiles.key);
+      request.onsuccess = () => apply(() => {
+        const reading = NC.profiles.forImport(request.result?.value);
+        putBookRow(t, book);
+        if (reading) t.objectStore('prefs').put({ id: book.id, updatedAt: Date.now(), reading });
+      });
+    }, ['books', 'settings', 'prefs']), () => ({ books: [notebookBook(book)] })),
     patchBook: (id, fields) => notifyCatalog(writeBooks((t, apply) => {
       const request = t.objectStore('books').get(id);
       request.onsuccess = () => apply(() => {
@@ -563,6 +576,11 @@ NC.db = (() => {
     getSetting: (key, fallback) => reqToPromise('settings', 'readonly', (s) => s.get(key))
       .then((row) => (row && row.value !== undefined) ? row.value : fallback),
     putSetting: (key, value) => tx('settings', 'readwrite', (s) => s.put({ key, value })),
+    updateProfiles: (change) => update('settings', NC.profiles.key,
+      (row) => ({ key: NC.profiles.key, value: change(row?.value) })).then(({ value }) => {
+      catalogChannel?.postMessage({ profiles: true });
+      return value;
+    }),
 
     /* ── Préférences de lecture, par livre (module centralisé) ──
        Un enregistrement par livre : { id, theme, fontSize?, updatedAt }.
@@ -571,6 +589,9 @@ NC.db = (() => {
     getPrefs: (bookId) => reqToPromise('prefs', 'readonly', (s) => s.get(bookId)),
     allPrefs: () => reqToPromise('prefs', 'readonly', (s) => s.getAll()),
     putPrefs: (p) => tx('prefs', 'readwrite', (s) => s.put(p)),
+    updateReadingPrefs: (id, change) => update('prefs', id, (row) => ({
+      ...row, ...change(row || {}), id, updatedAt: Date.now(),
+    }), id),
     patchPrefs: (id, fields) => update('prefs', id, (row) => {
       const next = { ...row, ...fields, id, updatedAt: Date.now() };
       if (fields.typo) next.typo = { ...row?.typo, ...fields.typo };

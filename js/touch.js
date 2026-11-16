@@ -113,8 +113,9 @@ NC.touch = (() => {
     } else {
       const target = fontStep(g.base * (g.dist / g.dist0 || 1));
       if (Math.abs(target - g.base) < FONT_STEP) return;
-      try { c.setFontSize(target); } catch (e) { console.error(e); }
-      NC.toast('Taille du texte : ' + target + ' %', 'info', 1500);
+      if (c.fixedLayout) return;
+      await NC.reader.changeFontSize(target);
+      NC.toast('Taille du texte : ' + c.fontSize + ' %', 'info', 1500);
     }
   }
 

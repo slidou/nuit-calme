@@ -622,7 +622,7 @@ NC.TYPO_DEFAULT = { font: 'cormorant', lineHeight: 1.62, justify: 'left' };
    incomplet) : la typographie ne peut jamais « casser » un livre. */
 NC.normalizeTypo = function (t) {
   const src = (t && typeof t === 'object') ? t : {};
-  const font = NC.BOOK_FONTS[src.font] ? src.font : NC.TYPO_DEFAULT.font;
+  const font = Object.hasOwn(NC.BOOK_FONTS, src.font) ? src.font : NC.TYPO_DEFAULT.font;
   let lh = Number(src.lineHeight);
   if (!isFinite(lh)) lh = NC.LINE_HEIGHTS[1].value; // « Confort »
   else lh = Math.max(1.2, Math.min(2.4, lh));
@@ -636,10 +636,12 @@ NC.normalizeTypo = function (t) {
 NC.typoCss = function (typo) {
   const t = NC.normalizeTypo(typo);
   const stack = (NC.BOOK_FONTS[t.font] || NC.BOOK_FONTS.cormorant).stack;
+  const paragraph = { compact: '.48em', generous: '1.24em' }[typo.paragraph];
   return `
     body{ font-family:${stack} !important; line-height:${t.lineHeight} !important; }
     p{
       text-align:${t.justify === 'justify' ? 'justify' : 'start'} !important;
+      ${paragraph ? `margin-bottom:${paragraph} !important;` : ''}
       ${t.justify === 'justify' ? 'hyphens:auto; -webkit-hyphens:auto; -ms-hyphens:auto;' : ''}
     }
   `;

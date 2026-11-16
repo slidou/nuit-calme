@@ -7,6 +7,7 @@ import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { testNotebook } from './notebook.mjs';
+import { testProfiles } from './reading-profiles.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const browser = process.env.NC_BROWSER || (process.platform === 'win32'
@@ -15,7 +16,9 @@ const browser = process.env.NC_BROWSER || (process.platform === 'win32'
 const profile = await mkdtemp(join(tmpdir(), 'nuit-calme-test-'));
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
   '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2', '.png': 'image/png' };
-const baseline = process.env.NC_BENCHMARK && process.env.NC_BASE_REF;
+const profiles = process.argv.includes('--profiles');
+const profilesBaseline = process.argv.includes('--profiles-baseline');
+const baseline = (process.env.NC_BENCHMARK && process.env.NC_BASE_REF) || (profilesBaseline && '5d00f6a');
 const migration = process.env.NC_MIGRATION === '1';
 const enableV8 = process.env.NC_TEST_V8 === '1';
 const v7Ref = '6295c66c57e474546c5c8986ac937bca921f3807';
@@ -746,6 +749,8 @@ try {
     await testUx(cdp);
   } else if (process.env.NC_NOTEBOOK === '1') {
     await testNotebook({ cdp, port, url, openTab, until, makeBooks });
+  } else if (profiles || profilesBaseline) {
+    await testProfiles({ cdp, port, url, openTab, until, makeBooks, baseline: profilesBaseline });
   } else {
 
   assert.equal((await cdp.run(`(${rawCatalog})()`)).version, enableV8 ? 8 : 7);

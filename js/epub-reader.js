@@ -27,19 +27,23 @@ const NC_FOCUS_CSS = [
 NC.openEpub = async function (rec, opts) {
   const host = NC.$('#epub-host');
   const book = ePub(rec.data);
+  try { await book.opened; await book.loaded.displayOptions; } catch (error) { book.destroy(); throw error; }
+  const fixedLayout = book.package.metadata.layout === 'pre-paginated' || book.displayOptions?.fixedLayout === 'true';
+  const fixedSections = book.spine.spineItems.some((section) => section.properties.includes('rendition:layout-pre-paginated'));
 
   const ctl = {
     type: 'epub',
     rec,
     book,
     spread: opts.spread,                    // 'always' | 'none'
-    flow: opts.flow === 'scrolled' ? 'scrolled' : 'paginated', // mode de lecture (ajout n°3)
+    flow: !fixedLayout && !fixedSections && opts.flow === 'scrolled' ? 'scrolled' : 'paginated',
+    fixedLayout: fixedLayout || fixedSections,
     /* Borna à l'ouverture (V2.26) : une valeur parasite enregistrée
        (fiche ancienne, donnée abîmée) s'appliquait telle quelle —
        setFontSize borne, l'ouverture ne le faisait pas. */
-    fontSize: Math.max(80, Math.min(170, Math.round(opts.fontSize || 100))),
+    fontSize: fixedLayout || fixedSections ? 100 : NC.profiles.normalize(opts).fontSize,
     theme: NC.BOOK_THEMES[opts.theme] ? opts.theme : 'paper',
-    typo: NC.normalizeTypo(opts.typo),      // police / interlignage / alignement (ajout n°2)
+    typo: NC.profiles.normalize(opts).typo,
     lastCfi: opts.lastCfi || '',
     focus: false,                           // mode concentration (ajout n°5)
     _wheelNavAt: 0,                         // anti-rebond du changement de section à la molette
@@ -54,50 +58,68 @@ NC.openEpub = async function (rec, opts) {
 
   /* Cache des annotations du livre courant (avec start/end/sectionIndex) */
   let annCache = [];
+  let stableAnchor = null;
+  let anchorScroll = '';
+  let reflowPending = 0;
+  let layoutChain = Promise.resolve();
+  let hostSize;
+  let observer;
 
-  /* ── Création de la rendition ──
-     Les recréations (ouverture, défilement vertical, redisplay) sont
-     SÉRIALISÉES (n°19) : détruire une rendition pendant que son
-     display() est en vol fait nourrir à epub.js une rejeton non
-     géré (« reading 'package' ») — deux V pressés vite, ou deux
-     clics rapides sur le bouton, suffisaient. La file garantit
-     qu'un display() se dénoue avant que le suivant ne détruise. */
-  let renditionChain = Promise.resolve();
-  function createRendition(target) {
-    const run = () => {
-      if (ctl._destroyed) return Promise.resolve(); // livre fermé entre-temps
-      try {
-        return doCreateRendition(target);
-      } catch (e) {
-        console.error(e);
-        return Promise.resolve();
-      }
-    };
-    const out = renditionChain.then(run, run);
-    renditionChain = out.then(() => {}, () => {}); // la file survit aux erreurs
-    return out;
+  function scrollKey(rendition) {
+    const container = rendition.manager?.container;
+    return container ? `${container.scrollLeft}:${container.scrollTop}` : '';
   }
-  function doCreateRendition(target) {
+
+  function sizeHost() {
+    const width = { narrow: 'min(100%, 670px)', medium: 'min(100%, 850px)', wide: 'min(100%, 1050px)' };
+    host.style.maxWidth = ctl.fixedLayout ? '' : (width[ctl.typo.width] || '');
+    host.style.marginInline = 'auto';
+    hostSize = { width: Math.max(1, host.clientWidth), height: Math.max(1, host.clientHeight) };
+    return hostSize;
+  }
+
+  function typographyCss() {
+    const padding = { compact: 'min(4vw, 36px)', generous: 'min(12vw, 110px)' }[ctl.typo.margin];
+    return NC.typoCss(ctl.typo) + (ctl.flow === 'scrolled' && padding
+      ? `body { padding-inline:${padding} !important; }` : '');
+  }
+
+  function publish(r, location) {
+    if (!location?.start?.cfi || r !== ctl._rendition || ctl._destroyed) return;
+    const scroll = scrollKey(r);
+    if (ctl.location?.start?.cfi !== location.start.cfi || !stableAnchor || scroll !== anchorScroll) {
+      stableAnchor = NC.epubAnchor.capture(r, host, location);
+      anchorScroll = scroll;
+    }
+    ctl.location = location;
+    ctl._onRelocated?.(location);
+  }
+
+  /* Ouverture initiale, puis créations sérialisées avec la navigation. */
+  function createRendition(target) {
     if (ctl._rendition) { try { ctl._rendition.destroy(); } catch (e) {} }
     host.innerHTML = '';
     /* Mode défilement vertical (ajout n°3) : flow « scrolled-doc » = la
        section entière dans une iframe haute, le conteneur défile. La
        vue double n'a pas de sens ici (spread forcé à none). */
     const scrolled = ctl.flow === 'scrolled';
+    const size = sizeHost();
+    const pageGap = { compact: .06, generous: .19 }[ctl.typo.margin];
     const r = book.renderTo(host, {
-      width: '100%',
-      height: '100%',
+      ...size,
       flow: scrolled ? 'scrolled-doc' : 'paginated',
       spread: scrolled ? 'none' : ctl.spread,
       allowScriptedContent: false,
       minSpreadWidth: 700,
+      resizeOnOrientationChange: false,
+      ...(!ctl.fixedLayout && pageGap && !scrolled ? { gap: Math.round(size.width * pageGap / (ctl.spread === 'always' && size.width >= 700 ? 2 : 1)) } : {}),
     });
     // Thème courant injecté dans chaque contenu rendu (voie fiable epub.js)
     r.hooks.content.register((contents) => {
-      try { contents.addStylesheetCss(NC.bookThemeCss(ctl.theme), 'nuit-calme'); } catch (e) { console.error(e); }
-      /* Typographie avancée (n°2) : feuille DÉDIÉE posée après celle du
-         thème — même mécanisme de remplacement par clé. */
-      try { contents.addStylesheetCss(NC.typoCss(ctl.typo), 'nuit-calme-typo'); } catch (e) { console.error(e); }
+      if (!ctl.fixedLayout) {
+        contents.addStylesheetCss(NC.bookThemeCss(ctl.theme), 'nuit-calme');
+        contents.addStylesheetCss(typographyCss(), 'nuit-calme-typo');
+      }
       try { contents.addStylesheetCss(NC_FOCUS_CSS, 'nuit-calme-focus'); } catch (e) { console.error(e); }
       try { wireFocusSpot(contents); } catch (e) { console.error(e); }
       // nouvelle section rendue PENDANT que le mode est actif : classe immédiate
@@ -110,7 +132,7 @@ NC.openEpub = async function (rec, opts) {
          au document parent. Échoue doucement si le module est absent. */
       try { if (NC.touch) NC.touch.wireContent(contents); } catch (e) { console.error(e); }
     });
-    r.themes.fontSize(ctl.fontSize + '%');
+    if (!ctl.fixedLayout) r.themes.fontSize(ctl.fontSize + '%');
     /* V2.27 : les rects des soulignages sont cuits au moment du dessin.
        En paginé, tourner la page DANS UNE MÊME SECTION ne re-rend pas
        l'iframe (l'ancien « rendered » ne suffit plus) : les voiles
@@ -125,8 +147,7 @@ NC.openEpub = async function (rec, opts) {
       }, 140);
     };
     r.on('relocated', (loc) => {
-      ctl.location = loc;
-      if (ctl._onRelocated) ctl._onRelocated(loc);
+      if (!reflowPending) publish(r, loc);
       scheduleRedraw();
     });
     r.on('selected', onSelected);
@@ -135,18 +156,9 @@ NC.openEpub = async function (rec, opts) {
     r.on('rendered', (section, view) => {
       try { redrawView(view); } catch (e) { console.error(e); }
     });
-    // Reflow (redimensionnement, taille du texte) : les rects suivent.
-    let rrTimer = null;
-    r.on('resized', () => {
-      clearTimeout(rrTimer);
-      rrTimer = setTimeout(() => { try { redrawAll(); } catch (e) { console.error(e); } }, 200);
-    });
-    if (scrolled) wireScrollExtras();
     ctl._rendition = r;
-    return r.display(target || undefined).catch(() => r.display());
+    return r.display(target || undefined).then(() => { if (scrolled) wireScrollExtras(); });
   }
-
-  ctl.redisplay = (target) => createRendition(target);
 
   /* ── Tourne-page au bord de la page elle-même ──
      Les clics À L'INTÉRIEUR de l'iframe ne remontent jamais au document
@@ -243,16 +255,34 @@ NC.openEpub = async function (rec, opts) {
      En défilement vertical, next()/prev() d'epub.js sautent déjà de
      section en section ; on les remplace par un ciblage déterministe
      de la section voisine (même résultat, moins d'états internes). */
-  ctl.next = () => {
-    if (!ctl._rendition) return;
-    if (ctl.flow === 'scrolled') return gotoSection(1);
-    return ctl._rendition.next();
-  };
-  ctl.prev = () => {
-    if (!ctl._rendition) return;
-    if (ctl.flow === 'scrolled') return gotoSection(-1);
-    return ctl._rendition.prev();
-  };
+  function queueLayout(operation) {
+    const result = layoutChain.then(() => { if (!ctl._destroyed) return operation(); });
+    layoutChain = result.catch(() => {});
+    return result;
+  }
+
+  function navigate(move) {
+    return queueLayout(async () => {
+      const r = ctl._rendition;
+      stableAnchor = null;
+      await move(r);
+      publish(r, await r.currentLocation());
+    });
+  }
+
+  const displayAt = (target) => navigate(async (r) => {
+    const section = typeof target === 'string' && target.startsWith('epubcfi(') && book.spine.get(target);
+    if (!section || section.index === ctl.location?.start?.index) {
+      await r.display(target);
+      return;
+    }
+    // Une nouvelle section peut changer de géométrie au chargement de sa police.
+    reflowPending++;
+    try { await showAnchor({ cfi: target, index: section.index, href: section.href }, false); }
+    finally { reflowPending--; }
+  });
+  ctl.next = () => navigate((r) => ctl.flow === 'scrolled' ? gotoSection(1) : r.next());
+  ctl.prev = () => navigate((r) => ctl.flow === 'scrolled' ? gotoSection(-1) : r.prev());
 
   async function gotoSection(dir) {
     if (!ctl._rendition) return;
@@ -267,12 +297,14 @@ NC.openEpub = async function (rec, opts) {
     } catch (e) {}
     const target = items[Math.min(items.length - 1, Math.max(0, idx + dir))];
     if (!target) return;
-    try { await ctl._rendition.display(target.href); } catch (e) {}
+    const rendition = ctl._rendition;
+    try { await rendition.display(target.href); } catch (e) {}
     /* En remontant d'une section, on arrive en BAS de la précédente
        (continuité de lecture naturelle) au lieu de retomber sous son
        titre. display() repositionne lui-même : on corrige après coup. */
     if (dir < 0) {
       setTimeout(() => {
+        if (ctl._destroyed || ctl._rendition !== rendition) return;
         const c = host.querySelector('.epub-container');
         if (c && c.scrollHeight > c.clientHeight && c.scrollTop < 40) {
           c.scrollTop = c.scrollHeight;
@@ -297,30 +329,103 @@ NC.openEpub = async function (rec, opts) {
     return true;
   };
 
-  ctl.setSpread = async (mode) => {
-    ctl.spread = mode;
-    const loc = ctl.location;
-    const target = loc ? loc.start.cfi : (ctl.lastCfi || undefined);
-    await createRendition(target);
-    await ctl.restoreHighlights();
-    return target;
-  };
+  const frame = () => new Promise((resolve) => {
+    const timer = setTimeout(() => { cancelAnimationFrame(raf); resolve(); }, 80);
+    const raf = requestAnimationFrame(() => { clearTimeout(timer); resolve(); });
+  });
 
-  /* Bascule pages ⇄ défilement vertical (ajout n°3) : la rendition est
-     recréée avec l'autre flow, à la position exacte où l'on se trouvait. */
-  ctl.setFlow = async (mode) => {
-    ctl.flow = mode === 'scrolled' ? 'scrolled' : 'paginated';
-    const loc = ctl.location;
-    const target = loc ? loc.start.cfi : (ctl.lastCfi || undefined);
-    await createRendition(target);
-    await ctl.restoreHighlights();
-    return ctl.flow;
+  async function settleFonts(rendition) {
+    const fonts = rendition.getContents().map(({ document }) => {
+      // Le calcul du style amorce le chargement de la police avant fonts.ready.
+      document.body.getBoundingClientRect();
+      return document.fonts?.ready;
+    });
+    if (fonts.length) {
+      let timeout;
+      await Promise.race([Promise.allSettled(fonts), new Promise((resolve) => { timeout = setTimeout(resolve, 350); })]);
+      clearTimeout(timeout);
+    }
+    await frame();
+    await frame();
+  }
+
+  async function showAnchor(anchor, recreate) {
+    const target = anchor?.cfi || ctl.lastCfi || undefined;
+    const display = (cfi) => recreate ? createRendition(cfi) : ctl._rendition.display(cfi);
+    try {
+      if (recreate || target) await display(target);
+    } catch (error) {
+      if (!anchor?.href) throw error;
+      await display(anchor.href);
+    }
+    const r = ctl._rendition;
+    await settleFonts(r);
+    if (anchor?.cfi) {
+      const recovered = NC.epubAnchor.recover(r, anchor);
+      const precise = recovered ? { ...anchor, cfi: recovered } : anchor;
+      if (!NC.epubAnchor.inView(r, host, precise)) {
+        try { await r.display(precise.cfi); } catch (error) { /* La section déjà affichée reste en place. */ }
+        await frame();
+      }
+      if (NC.epubAnchor.inView(r, host, precise)) return precise;
+    }
+    return null;
+  }
+
+  function reflow(change, resize = false) {
+    return queueLayout(async () => {
+      reflowPending++;
+      const before = ctl._rendition;
+      try {
+        const anchor = stableAnchor && anchorScroll === scrollKey(before) ? stableAnchor
+          : NC.epubAnchor.capture(before, host, await before.currentLocation() || ctl.location);
+        const recreate = change?.() || resize;
+        const restored = await showAnchor(anchor, recreate);
+        const r = ctl._rendition;
+        const location = await r.currentLocation();
+        if (location?.start?.cfi) {
+          stableAnchor = restored || NC.epubAnchor.capture(r, host, location);
+          anchorScroll = scrollKey(r);
+          ctl.location = location;
+        }
+        redrawAll();
+      } finally {
+        reflowPending--;
+        if (!ctl._destroyed && ctl.location) ctl._onRelocated?.(ctl.location, true);
+      }
+    });
+  }
+
+  ctl.layoutSettled = () => layoutChain;
+  ctl.setSpread = (mode) => reflow(() => { ctl.spread = mode; return true; });
+
+  ctl.applyReading = (settings) => {
+    if (ctl.fixedLayout) { ctl.setTheme(settings.theme); return Promise.resolve(); }
+    const next = NC.profiles.normalize(settings);
+    const previous = { typo: ctl.typo, fontSize: ctl.fontSize, flow: ctl.flow };
+    const hasLayoutChange = previous.flow !== next.flow || previous.fontSize !== next.fontSize ||
+      Object.keys(next.typo).some((key) => previous.typo[key] !== next.typo[key]);
+    if (!hasLayoutChange && !reflowPending) { ctl.setTheme(next.theme); return Promise.resolve(); }
+    return reflow(() => {
+      const recreate = ctl.flow !== next.flow || ctl.typo.width !== next.typo.width || ctl.typo.margin !== next.typo.margin;
+      ctl.flow = next.flow;
+      ctl.typo = next.typo;
+      ctl.fontSize = next.fontSize;
+      ctl.setTheme(next.theme);
+      if (!recreate) {
+        const r = ctl._rendition;
+        r.getContents().forEach((contents) => contents.addStylesheetCss(typographyCss(), 'nuit-calme-typo'));
+        r.themes.fontSize(ctl.fontSize + '%');
+      }
+      return recreate;
+    });
   };
 
   /* Changement de thème à chaud : on remplace simplement la feuille
      « nuit-calme » dans chaque document déjà rendu (pas de re-rendu). */
   ctl.setTheme = (mode) => {
     ctl.theme = NC.BOOK_THEMES[mode] ? mode : 'paper';
+    if (ctl.fixedLayout) return ctl.theme;
     const css = NC.bookThemeCss(ctl.theme);
     if (ctl._rendition) {
       ctl._rendition.getContents().forEach((c) => {
@@ -328,27 +433,6 @@ NC.openEpub = async function (rec, opts) {
       });
     }
     return ctl.theme;
-  };
-
-  /* ── Typographie avancée (ajout n°2) : changement à chaud ──
-     Même principe que setTheme : on remplace la feuille
-     « nuit-calme-typo » dans chaque document déjà rendu. Changer la
-     police ou l'interlignage reflowe le texte : les calques de
-     soulignement sont redessinés en deux temps (même pattern que
-     setFontSize). */
-  ctl.setTypo = (patch) => {
-    ctl.typo = NC.normalizeTypo(Object.assign({}, ctl.typo, patch || {}));
-    const css = NC.typoCss(ctl.typo);
-    if (ctl._rendition) {
-      ctl._rendition.getContents().forEach((c) => {
-        try { c.addStylesheetCss(css, 'nuit-calme-typo'); } catch (e) { console.error(e); }
-      });
-      clearTimeout(ctl._typoTimer);
-      ctl._typoTimer = setTimeout(() => { try { redrawAll(); } catch (e) {} }, 260);
-      clearTimeout(ctl._typoTimer2);
-      ctl._typoTimer2 = setTimeout(() => { try { redrawAll(); } catch (e) {} }, 900);
-    }
-    return ctl.typo;
   };
 
   /* ── Mode concentration : activé/désactivé à chaud ──
@@ -419,30 +503,16 @@ NC.openEpub = async function (rec, opts) {
     } catch (e) {}
   }
 
-  ctl.setFontSize = (pct) => {
-    ctl.fontSize = Math.max(80, Math.min(170, pct));
-    /* prefs est la source des préférences : sauvegarde différée pour
-       absorber les rafales de clics sur A− / A+ sans marteler la base. */
-    clearTimeout(ctl._fsPrefsTimer);
-    ctl._fsPrefsTimer = setTimeout(() => {
-      NC.db.patchPrefs(rec.id, { fontSize: ctl.fontSize })
-        .catch(() => {});
-    }, 400);
-    if (ctl._rendition) {
-      ctl._rendition.themes.fontSize(ctl.fontSize + '%');
-      // la refonte du texte est asynchrone : on redessine en deux temps
-      clearTimeout(ctl._fsTimer);
-      ctl._fsTimer = setTimeout(() => { try { redrawAll(); } catch (e) {} }, 260);
-      clearTimeout(ctl._fsTimer2);
-      ctl._fsTimer2 = setTimeout(() => { try { redrawAll(); } catch (e) {} }, 900);
-    }
-    return ctl.fontSize;
-  };
-
   /* ── Progression ── */
   ctl.percent = () => {
     const loc = ctl.location;
     if (!loc || !loc.start) return 0;
+    if (stableAnchor?.cfi && ctl.locationsReady) {
+      try {
+        const value = book.locations.percentageFromCfi(stableAnchor.cfi);
+        if (Number.isFinite(value)) return value;
+      } catch (error) { /* le début de la page reste utilisable */ }
+    }
     if (typeof loc.start.percentage === 'number' && isFinite(loc.start.percentage)) return loc.start.percentage;
     try {
       const sec = book.spine.get(loc.start.cfi);
@@ -455,21 +525,21 @@ NC.openEpub = async function (rec, opts) {
     p = Math.max(0, Math.min(1, p));
     if (ctl.locationsReady) {
       const cfi = book.locations.cfiFromPercentage(p);
-      if (cfi) { await ctl._rendition.display(cfi); return; }
+      if (cfi) { await displayAt(cfi); return; }
     }
     const items = book.spine.spineItems || [];
     if (!items.length) return;
     const idx = Math.min(items.length - 1, Math.max(0, Math.floor(p * items.length)));
-    await ctl._rendition.display(items[idx].href);
+    await displayAt(items[idx].href);
   };
 
   const writeProgress = NC.progressWriter(rec.id);
   ctl.saveProgress = () => {
     const loc = ctl.location;
-    if (opts.preview || !loc?.start?.cfi) return Promise.resolve();
+    if (opts.preview || reflowPending || !loc?.start?.cfi) return Promise.resolve();
     return writeProgress({
-      fontSize: ctl.fontSize,
-      lastCfi: loc.start.cfi,
+      fontSize: ctl.legacyFontSize,
+      lastCfi: stableAnchor?.cfi || loc.start.cfi,
       pct: Math.round(ctl.percent() * 1000) / 1000,
     });
   };
@@ -1035,7 +1105,7 @@ NC.openEpub = async function (rec, opts) {
     return annCache;
   };
 
-  ctl.gotoCfi = (cfi) => ctl._rendition.display(cfi).catch(() => {});
+  ctl.gotoCfi = (cfi) => displayAt(cfi).catch(() => {});
 
   /* ── Signets (n°8) ──
      Instantané de la position courante : CFI (saut exact), index de
@@ -1075,10 +1145,10 @@ NC.openEpub = async function (rec, opts) {
      section enregistrée — même stratégie que « Aller au passage ». */
   ctl.gotoBookmark = async (bm) => {
     if (!ctl._rendition || !bm) return;
-    if (bm.cfi) { try { await ctl._rendition.display(bm.cfi); return; } catch (e) {} }
+    if (bm.cfi) { try { await displayAt(bm.cfi); return; } catch (e) {} }
     if (typeof bm.sectionIndex === 'number') {
       const sec = book.spine.spineItems[bm.sectionIndex];
-      if (sec && sec.href) { try { await ctl._rendition.display(sec.href); return; } catch (e) {} }
+      if (sec && sec.href) { try { await displayAt(sec.href); return; } catch (e) {} }
     }
   };
 
@@ -1087,12 +1157,12 @@ NC.openEpub = async function (rec, opts) {
   ctl.gotoAnnotation = async (ann) => {
     if (!ctl._rendition) return;
     if (ann && ann.cfi) {
-      try { await ctl._rendition.display(ann.cfi); return; } catch (e) {}
+      try { await displayAt(ann.cfi); return; } catch (e) {}
     }
     if (ann && typeof ann.sectionIndex === 'number') {
       try {
         const sec = book.spine.spineItems[ann.sectionIndex];
-        if (sec && sec.href) { await ctl._rendition.display(sec.href); return; }
+        if (sec && sec.href) { await displayAt(sec.href); return; }
       } catch (e) {}
     }
   };
@@ -1102,14 +1172,14 @@ NC.openEpub = async function (rec, opts) {
     if (typeof cfi === 'string' && /^epubcfi\(.+\)$/.test(cfi)) {
       try {
         if (book.spine.get(cfi)) {
-          await ctl._rendition.display(cfi);
+          await displayAt(cfi);
           return 'cfi';
         }
       } catch (error) { /* essayer la section enregistrée */ }
     }
     const section = Number.isInteger(sectionIndex) && book.spine.spineItems[sectionIndex];
     if (!section?.href) return null;
-    await ctl._rendition.display(section.href);
+    await displayAt(section.href);
     return 'section';
   };
 
@@ -1329,34 +1399,23 @@ NC.openEpub = async function (rec, opts) {
     return `nuit-calme-${NC.slug(rec.title)}-${what}.png`;
   };
 
-  /* ── Redimensionnement : epub.js refait la mise en page, on
-     réaffiche ensuite l'endroit exact où l'on se trouvait, puis on
-     replace les soulignements. ── */
+  let resizeTimer;
   ctl.resize = () => {
     if (!ctl._rendition || ctl._destroyed) return;
-    const loc = ctl.location;
-    try { ctl._rendition.resize(); } catch (e) {}
-    if (loc && loc.start) {
-      setTimeout(() => {
-        if (!ctl._destroyed) {
-          ctl._rendition.display(loc.start.cfi).catch(() => {});
-          setTimeout(() => { try { redrawAll(); } catch (e) {} }, 420);
-        }
-      }, 80);
-    } else {
-      setTimeout(() => { try { redrawAll(); } catch (e) {} }, 260);
-    }
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (host.clientWidth && host.clientHeight && (host.clientWidth !== hostSize.width || host.clientHeight !== hostSize.height)) {
+        reflow(null, true).catch(() => NC.toast('Le passage n’a pas pu être recalé après le redimensionnement.', 'error'));
+      }
+    }, 100);
   };
 
   ctl.destroy = () => {
     ctl._destroyed = true;
-    /* Les minuteries de re-redessin ne doivent plus viser une rendition
-       détruite (fenêtre de 900 ms après un changement de police). */
-    clearTimeout(ctl._fsTimer);
-    clearTimeout(ctl._fsTimer2);
-    clearTimeout(ctl._typoTimer);
-    clearTimeout(ctl._typoTimer2);
-    clearTimeout(ctl._fsPrefsTimer);
+    clearTimeout(resizeTimer);
+    observer?.disconnect();
+    host.style.removeProperty('max-width');
+    host.style.removeProperty('margin-inline');
     /* rendition.destroy() démonte le manager et RETIRE ses écouteurs
        globaux (« resize » de la fenêtre) : sans lui, chaque cycle
        ouverture/fermeture laissait un écouteur fantôme derrière lui
@@ -1367,10 +1426,24 @@ NC.openEpub = async function (rec, opts) {
   };
 
   /* ── Ouverture ── */
+  ctl.legacyFontSize = opts.legacyFontSize || opts.fontSize || 100;
   try {
-    await createRendition(ctl.lastCfi || undefined);
+    let section;
+    try { if (ctl.lastCfi) section = book.spine.get(ctl.lastCfi); } catch (error) { /* CFI incomplet */ }
+    if (section) {
+      reflowPending++;
+      try {
+        stableAnchor = await showAnchor({ cfi: ctl.lastCfi, index: section.index, href: section.href }, true);
+        anchorScroll = scrollKey(ctl._rendition);
+        ctl.location = await ctl._rendition.currentLocation();
+      } finally { reflowPending--; }
+    } else {
+      await createRendition();
+    }
     await ctl.restoreHighlights();
     await ctl.loadToc();
+    observer = new ResizeObserver(ctl.resize);
+    observer.observe(host);
   } catch (error) {
     ctl.destroy();
     throw error;
