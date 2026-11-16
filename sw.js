@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   NUIT CALME — service worker (V2.27)
+   NUIT CALME — service worker
    L'app installée démarre sans réseau : la coquille (page, styles,
    scripts, bibliothèques epub.js / pdf.js, polices, icônes) vit dans
    le cache ; les livres, eux, reposent dans IndexedDB — la liseuse
@@ -7,13 +7,15 @@
    Stratégies :
    · navigations → réseau d'abord (les mises à jour arrivent d'une
      simple recharge), cache en secours si le réseau manque ;
-   · le reste → servi du cache puis rafraîchi en arrière-plan ;
-   · ce qui vient d'ailleurs (packs, livres distants) → le réseau
+   · ressources de l'interface → pré-cache de la version active ;
+   · packs, livres et autres ressources → le réseau
      décide, les importations finissent de toute façon en IndexedDB.
    ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const CACHE = 'nuit-calme-v2.27';
+const SCOPE = self.registration.scope;
+const CACHE_PREFIX = `nuit-calme:${SCOPE}:`;
+const CACHE = CACHE_PREFIX + 'v2.27-1';
 
 const PRECACHE = [
   './',
@@ -58,6 +60,8 @@ const PRECACHE = [
   'icons/icon-maskable-512.png',
   'icons/apple-touch-icon.png'
 ];
+const STATIC_URLS = new Set(PRECACHE.slice(2).map((path) => new URL(path, SCOPE).href));
+const ENTRY = new URL('index.html', SCOPE).href;
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -66,7 +70,7 @@ self.addEventListener('install', (event) => {
          réseau, jamais le cache HTTP du navigateur — une copie périmée
          ne peut plus s'installer (la mise à jour tenait parfois en
          deux ou trois recharges au lieu d'une seule). */
-      .then((cache) => cache.addAll(PRECACHE.map((u) => new Request(u, { cache: 'reload' }))))
+      .then((cache) => cache.addAll(PRECACHE.map((u) => new Request(new URL(u, SCOPE), { cache: 'reload' }))))
       .then(() => self.skipWaiting())
   );
 });
@@ -75,7 +79,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
       .then((keys) => Promise.all(
-        keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))
+        keys.filter((k) => k.startsWith(CACHE_PREFIX) && k !== CACHE).map((k) => caches.delete(k))
       ))
       .then(() => self.clients.claim())
   );
@@ -86,32 +90,18 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
 
   const url = new URL(req.url);
-  // Packs de livres et autres ressources distantes : le réseau décide.
-  if (url.origin !== self.location.origin) return;
-
-  // Navigation (la page elle-même) : réseau d'abord, cache en secours.
   if (req.mode === 'navigate') {
-    event.respondWith(
-      fetch(req).then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((cache) => cache.put('./index.html', copy));
-        return res;
-      }).catch(() => caches.match('./index.html'))
-    );
+    url.search = '';
+    if (url.href === SCOPE || url.href === ENTRY) {
+      event.respondWith(fetch(req).catch(async () => {
+        const cache = await caches.open(CACHE);
+        return await cache.match(ENTRY) || Response.error();
+      }));
+    }
     return;
   }
 
-  // Statique de l'app : cache d'abord, rafraîchi en arrière-plan.
-  event.respondWith(
-    caches.match(req).then((cached) => {
-      const refresh = fetch(req).then((res) => {
-        if (res && res.ok) {
-          const copy = res.clone();
-          caches.open(CACHE).then((cache) => cache.put(req, copy));
-        }
-        return res;
-      }).catch(() => cached);
-      return cached || refresh;
-    })
-  );
+  if (!STATIC_URLS.has(url.href) || req.headers.has('Range')) return;
+  event.respondWith(caches.open(CACHE).then(async (cache) =>
+    await cache.match(req) || fetch(req)));
 });

@@ -1331,11 +1331,6 @@ NC.openEpub = async function (rec, opts) {
     }
   };
 
-  /* ── Ouverture ── */
-  await createRendition(ctl.lastCfi || undefined);
-  await ctl.restoreHighlights();
-  await ctl.loadToc();
-
   ctl.destroy = () => {
     ctl._destroyed = true;
     /* Les minuteries de re-redessin ne doivent plus viser une rendition
@@ -1353,6 +1348,16 @@ NC.openEpub = async function (rec, opts) {
     try { book.destroy(); } catch (e) {}
     host.innerHTML = '';
   };
+
+  /* ── Ouverture ── */
+  try {
+    await createRendition(ctl.lastCfi || undefined);
+    await ctl.restoreHighlights();
+    await ctl.loadToc();
+  } catch (error) {
+    ctl.destroy();
+    throw error;
+  }
 
   return ctl;
 };

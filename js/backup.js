@@ -30,7 +30,6 @@ NC.backup = (() => {
   let armedReplace = null; // { file, manifest, timer } — remplacement en attente de confirmation
   let escBound = null;     // gestionnaire Échap le temps que la modale est ouverte
 
-  const arr = (x) => (Array.isArray(x) ? x : []);
   const $ = (sel) => NC.$(sel);
 
   /* ══════════════ Rappel : état de la dernière sauvegarde ══════════════ */
@@ -77,8 +76,8 @@ NC.backup = (() => {
       }
       const notice = $('#backup-notice');
       if (notice) {
-        const books = await NC.db.allBooks().catch(() => []);
-        notice.hidden = !(arr(books).length > 0 && isOverdue(last) && !snoozed());
+        const books = await NC.db.countBooks().catch(() => 0);
+        notice.hidden = !(books > 0 && isOverdue(last) && !snoozed());
       }
     } catch (e) { /* un rappel ne doit jamais faire tomber la page */ }
   }
@@ -92,7 +91,7 @@ NC.backup = (() => {
     /* Les livres partent d'une seule lecture de la base : leurs
        fichiers (les `data`) voyagent à part dans l'archive, leurs
        fiches (sans `data`) tiennent dans library.json. */
-    const rawBooks = arr(await NC.db.allBooks());
+    const { books: rawBooks, ...stores } = await NC.db.backupSnapshot();
     const metas = [];
     for (let i = 0; i < rawBooks.length; i++) {
       const { data, ...meta } = rawBooks[i];
@@ -102,12 +101,6 @@ NC.backup = (() => {
         await NC.tick();
       }
     }
-    const [annotations, bookmarks, history, readstats, progress, prefs, bookmeta, groups, settings] =
-      await Promise.all([
-        NC.db.allAnnotations(), NC.db.allBookmarks(), NC.db.allHistory(),
-        NC.db.allReadStats(), NC.db.allProgress(), NC.db.allPrefs(),
-        NC.db.allBookMeta(), NC.db.allGroups(), NC.db.allSettings(),
-      ]);
     let goal = null;
     try { goal = JSON.parse(localStorage.getItem('nc.reading-goal') || 'null'); } catch (e) {}
     return {
@@ -115,17 +108,13 @@ NC.backup = (() => {
         app: APP, format: FORMAT, appVersion: APP_VERSION,
         createdAt: new Date().toISOString(),
         counts: {
-          books: metas.length, annotations: arr(annotations).length,
-          bookmarks: arr(bookmarks).length, groups: arr(groups).length,
+          books: metas.length, annotations: stores.annotations.length,
+          bookmarks: stores.bookmarks.length, groups: stores.groups.length,
         },
       },
       data: {
         books: metas,
-        annotations: arr(annotations), bookmarks: arr(bookmarks),
-        history: arr(history), readstats: arr(readstats),
-        progress: arr(progress), prefs: arr(prefs),
-        bookmeta: arr(bookmeta), groups: arr(groups),
-        settings: arr(settings).filter((s) => s && s.key !== undefined),
+        ...stores,
         goal: (goal && typeof goal === 'object') ? goal : null,
       },
       rawBooks, // avec les fichiers — ne quitte jamais la mémoire de l'export
@@ -150,7 +139,7 @@ NC.backup = (() => {
       /* Les fichiers des livres : tels quels, sans recompression — un
          EPUB est déjà une archive, un PDF ne se laisse pas dégonfler. */
       for (const b of state.rawBooks) {
-        if (!b || b.id == null || !b.data) continue;
+        if (!b.data) throw new Error('Fichier de livre absent de la bibliothèque');
         zip.file(`books/${b.id}.${b.type === 'pdf' ? 'pdf' : 'epub'}`, b.data, { compression: 'STORE' });
       }
       const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
@@ -166,7 +155,7 @@ NC.backup = (() => {
       return { blob, filename, manifest: state.manifest };
     } catch (err) {
       console.error('Sauvegarde échouée', err);
-      if (prog) prog.done('La sauvegarde n\u2019a pas pu être créée (mémoire saturée ?). Essayez en deux fois, après avoir fermé les autres onglets.', 'error', 8000);
+      if (prog) prog.done('La sauvegarde complète n’a pas pu être créée. Vérifiez que les livres s’ouvrent et réessayez après avoir fermé les autres onglets.', 'error', 8000);
       throw err;
     }
   }
@@ -184,140 +173,82 @@ NC.backup = (() => {
     const lib = zip.file('library.json');
     if (!mf || !lib) throw new Error('incomplet');
     const manifest = JSON.parse(await mf.async('string'));
-    if (manifest.app !== APP) throw new Error('étranger');
+    if (!manifest || manifest.app !== APP) throw new Error('étranger');
+    if (manifest.format !== FORMAT) throw new Error('version incompatible');
     return { manifest, zip };
   }
 
-  /* L'application d'une sauvegarde. mode 'merge' : rien n'est effacé,
-     ce qui manque s'ajoute, les horodatages arbitrent les frottis.
-     mode 'replace' : la base est d'abord vidée (NC.db.clearAll), puis
-     la sauvegarde s'y réinstalle telle quelle. */
+  const OPTIONAL_STORES = ['annotations', 'bookmarks', 'history', 'readstats',
+    'progress', 'prefs', 'bookmeta', 'groups', 'settings'];
+
+  function validateRows(rows, key) {
+    if (!Array.isArray(rows)) throw new Error('incomplet');
+    const keys = new Set();
+    for (const row of rows) {
+      const id = row && row[key];
+      if (!row || Array.isArray(row) ||
+          !((typeof id === 'string' && id.length) || Number.isFinite(id)) ||
+          keys.has(id)) throw new Error('incomplet');
+      keys.add(id);
+    }
+  }
+
   async function importFile(file, mode, onStep) {
-    const step = (m) => { if (onStep) onStep(m); };
+    const step = (message) => { if (onStep) onStep(message); };
+    if (mode !== 'merge' && mode !== 'replace') throw new Error('Mode de restauration inconnu');
     const { manifest, zip } = await peek(file);
     const data = JSON.parse(await zip.file('library.json').async('string'));
-    const recap = { booksAdded: 0, booksKept: 0, booksFailed: 0, annotations: 0,
-      bookmarks: 0, history: 0, readstats: 0, progress: 0, prefs: 0,
-      bookmeta: 0, groups: 0, settings: 0, goal: false };
+    if (!data || typeof data !== 'object') throw new Error('incomplet');
+    validateRows(data.books, 'id');
+    if (manifest.counts && manifest.counts.books !== undefined &&
+        manifest.counts.books !== data.books.length) throw new Error('incomplet');
 
-    if (mode === 'replace') {
-      step('Effacement de la bibliothèque actuelle…');
-      await NC.db.clearAll();
-      try { localStorage.removeItem('nc.reading-goal'); } catch (e) {}
+    const state = { books: [] };
+    for (const name of OPTIONAL_STORES) {
+      const rows = data[name] === undefined ? [] : data[name];
+      validateRows(rows, name === 'settings' ? 'key' : 'id');
+      state[name] = rows;
     }
 
-    /* ── Les livres : le corps du travail ── */
-    const remoteBooks = arr(data.books);
-    for (let i = 0; i < remoteBooks.length; i++) {
-      const rb = remoteBooks[i];
-      if (!rb || rb.id == null) continue;
-      step(`Restauration — ${i + 1}/${remoteBooks.length} : « ${rb.title || 'livre'} »…`);
-      const local = await NC.db.getBook(rb.id);
-      if (mode === 'merge' && local) {
-        recap.booksKept++;
-        if (!local.cover && rb.cover) { // la couverture manquante suit la fiche
-          local.cover = rb.cover;
-          await NC.db.putBook(local);
-        }
-        continue;
+    for (const [index, book] of data.books.entries()) {
+      if (book.type !== 'pdf' && book.type !== 'epub') throw new Error('incomplet');
+      const entry = zip.file(`books/${book.id}.${book.type}`);
+      if (!entry) throw new Error('incomplet');
+      step(`Vérification des fichiers — ${index + 1}/${data.books.length}…`);
+      const buffer = await entry.async('arraybuffer');
+      if (!buffer.byteLength || (book.size > 0 && book.size !== buffer.byteLength)) {
+        throw new Error('incomplet');
       }
-      const f = zip.file(`books/${rb.id}.${rb.type === 'pdf' ? 'pdf' : 'epub'}`);
-      if (!f) { recap.booksFailed++; continue; }
-      try {
-        const buf = await f.async('arraybuffer');
-        await NC.db.putBook(Object.assign({}, rb, { data: buf }));
-        recap.booksAdded++;
-      } catch (e) {
-        console.error('Livre non restauré', rb.id, e);
-        recap.booksFailed++;
+      state.books.push({ ...book, data: buffer });
+    }
+
+    const replace = mode === 'replace';
+    step('Enregistrement de la bibliothèque…');
+    const recap = await NC.db.restoreBackup(state, replace);
+    recap.goal = false;
+    try {
+      const key = 'nc.reading-goal';
+      const goal = data.goal;
+      const hasGoal = goal && typeof goal === 'object' && Number.isFinite(goal.target) && goal.target >= 1;
+      if (hasGoal && (replace || !JSON.parse(localStorage.getItem(key) || 'null'))) {
+        localStorage.setItem(key, JSON.stringify(goal));
+        recap.goal = true;
+      } else if (replace) {
+        localStorage.removeItem(key);
       }
-      if (i % 3 === 0) await NC.tick();
-    }
-
-    /* ── Les satellites : annotations, signets, passages, statistiques ──
-       L'union par identifiant : ce qui existe déjà reste, ce qui manque
-       arrive. Les horodatages (createdAt / at / date) gardent leur sens. */
-    const [localAnns, localBms, localHist, localStats] = await Promise.all([
-      NC.db.allAnnotations(), NC.db.allBookmarks(), NC.db.allHistory(), NC.db.allReadStats(),
-    ]);
-    const known = (rows, id) => rows.some((x) => x && x.id === id);
-
-    for (const a of arr(data.annotations)) {
-      if (!a || a.id == null || known(localAnns, a.id)) continue;
-      await NC.db.putAnnotation(a); recap.annotations++;
-    }
-    for (const b of arr(data.bookmarks)) {
-      if (!b || b.id == null || known(localBms, b.id)) continue;
-      await NC.db.putBookmark(b); recap.bookmarks++;
-    }
-    for (const h of arr(data.history)) {
-      if (!h || h.id == null || known(localHist, h.id)) continue;
-      await NC.db.putHistory(h); recap.history++; // tel quel — la source est déjà bornée par livre
-    }
-    for (const r of arr(data.readstats)) {
-      if (!r || r.id == null || known(localStats, r.id)) continue;
-      await NC.db.putReadStat(r); recap.readstats++;
-    }
-
-    /* ── Progression, préférences, fiches : le plus récent l'emporte ── */
-    for (const p of arr(data.progress)) {
-      if (!p || p.id == null) continue;
-      const local = await NC.db.getProgress(p.id);
-      if (local && (local.lastOpened || 0) >= (p.lastOpened || 0)) continue;
-      await NC.db.putProgress(p); recap.progress++;
-    }
-    for (const p of arr(data.prefs)) {
-      if (!p || p.id == null) continue;
-      const local = await NC.db.getPrefs(p.id);
-      if (local && (local.updatedAt || 0) >= (p.updatedAt || 0)) continue;
-      await NC.db.putPrefs(p); recap.prefs++;
-    }
-    for (const m of arr(data.bookmeta)) {
-      if (!m || m.id == null) continue;
-      const local = await NC.db.getBookMeta(m.id);
-      if (local && (local.updatedAt || 0) >= (m.updatedAt || 0)) continue;
-      await NC.db.putBookMeta(m); recap.bookmeta++;
-    }
-
-    /* ── Groupes et réglages : l'union, le local protégé en fusion ──
-       La liste locale est lue UNE fois (V2.26 — elle était relue pour
-       chaque groupe, O(n²) pour rien) ; les groupes importés s'y
-       ajoutent au fil de l'eau pour que les doublons du fichier même
-       ne s'installent pas deux fois. */
-    const localGroups = arr(await NC.db.allGroups());
-    for (const g of arr(data.groups)) {
-      if (!g || g.id == null) continue;
-      if (localGroups.some((x) => x.id === g.id)) continue;
-      await NC.db.putGroup(g); localGroups.push(g); recap.groups++;
-    }
-    for (const s of arr(data.settings)) {
-      if (!s || s.key == null) continue;
-      const local = await NC.db.getSetting(s.key, undefined);
-      if (mode === 'merge' && local !== undefined) continue;
-      await NC.db.putSetting(s.key, s.value); recap.settings++;
-    }
-
-    /* ── L'objectif de lecture (V2.24) ──
-       En remplacement il suit la sauvegarde ; en fusion, il ne vient
-       que si l'appareil n'en avait pas — un cap posé ici ne se laisse
-       pas écraser par une copie ancienne. */
-    let goal = null;
-    try { goal = JSON.parse(localStorage.getItem('nc.reading-goal') || 'null'); } catch (e) {}
-    if (data.goal && typeof data.goal === 'object' && data.goal.target >= 1) {
-      if (mode === 'replace' || !goal) {
-        try { localStorage.setItem('nc.reading-goal', JSON.stringify(data.goal)); recap.goal = true; } catch (e) {}
-      }
+    } catch (err) {
+      recap.goalError = true;
+      console.warn('Objectif de lecture non restauré', err);
     }
 
     return { manifest, recap };
   }
 
   /* Le récit final, en français : ce qui est arrivé, ce qui était déjà là. */
-  function recapMessage(manifest, recap) {
+  function recapMessage(recap) {
     const bits = [];
     if (recap.booksAdded) bits.push(`${recap.booksAdded} livre${recap.booksAdded > 1 ? 's' : ''} restauré${recap.booksAdded > 1 ? 's' : ''}`);
     if (recap.booksKept) bits.push(`${recap.booksKept} déjà ${recap.booksKept > 1 ? 'présents' : 'présent'}`);
-    if (recap.booksFailed) bits.push(`${recap.booksFailed} fichier${recap.booksFailed > 1 ? 's' : ''} manquant${recap.booksFailed > 1 ? 's' : ''} dans la sauvegarde`);
     if (recap.annotations) bits.push(`${recap.annotations} soulignage${recap.annotations > 1 ? 's' : ''} & note${recap.annotations > 1 ? 's' : ''}`);
     if (recap.bookmarks) bits.push(`${recap.bookmarks} signet${recap.bookmarks > 1 ? 's' : ''}`);
     if (recap.progress) bits.push('progression à jour');
@@ -325,10 +256,8 @@ NC.backup = (() => {
     if (recap.history) bits.push('passages');
     if (recap.readstats) bits.push('statistiques');
     if (recap.goal) bits.push('objectif de lecture');
-    const head = recap.booksFailed && !recap.booksAdded
-      ? 'Rien de nouveau à restaurer'
-      : 'Sauvegarde restaurée';
-    return `${head} — ${bits.length ? bits.join(', ') : 'bibliothèque déjà à l\u2019identique'}.`;
+    return `Sauvegarde restaurée${bits.length ? ' — ' + bits.join(', ') : ''}.${
+      recap.goalError ? ' Le navigateur a refusé la mise à jour de l’objectif de lecture.' : ''}`;
   }
 
   /* ══════════════ Interface ══════════════ */
@@ -389,7 +318,7 @@ NC.backup = (() => {
     const prog = NC.toastHold('Lecture de la sauvegarde…');
     try {
       const res = await importFile(file, mode, (m) => prog.update(m));
-      prog.done(recapMessage(res.manifest, res.recap), 'success', 7000);
+      prog.done(recapMessage(res.recap), res.recap.goalError ? 'error' : 'success', 7000);
       /* La restauration vient de prouver qu'une sauvegarde existe :
          le rappel se tait trois jours (V2.26), comme après « Plus tard »
          — au lieu de ressasser un oubli que l'on vient de démentir. */
@@ -403,8 +332,10 @@ NC.backup = (() => {
       const msg = /étranger/.test(String(err && err.message))
         ? 'Ce fichier n\u2019est pas une sauvegarde Nuit Calme.'
         : /incomplet/.test(String(err && err.message))
-          ? 'Cette sauvegarde est incomplète (manifeste ou bibliothèque manquante).'
-          : 'La sauvegarde n\u2019a pas pu être lue. Le fichier est-il complet ?';
+          ? 'Cette sauvegarde est incomplète ou contient des données invalides.'
+          : /version incompatible/.test(String(err && err.message))
+            ? 'Cette version du format de sauvegarde est incompatible.'
+            : 'La restauration a échoué. Vérifiez le fichier et l’espace de stockage disponible.';
       prog.done(msg, 'error', 8000);
     } finally {
       busy = false;

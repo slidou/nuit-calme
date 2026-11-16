@@ -87,6 +87,7 @@ NC.packs = (() => {
   }
 
   function dropSession() {
+    if (session) session.abort.abort();
     session = null; // l'archive et les blobs aperçus repartent au GC
   }
 
@@ -189,7 +190,7 @@ NC.packs = (() => {
     dropSession();
     openPackId = pack.id;
     sigs = NC.library.librarySignatures();
-    session = { pack, entries: new Map(), seq: ++seqGen, zip: null };
+    session = { pack, entries: new Map(), seq: ++seqGen, abort: new AbortController() };
     $('#packs-list').hidden = true;
     $('#packs-note').hidden = true;
     $('#packs-detail').hidden = false;
@@ -232,7 +233,7 @@ NC.packs = (() => {
       btn.textContent = 'Chargement…';
       return;
     }
-    const todo = entries.filter((e) => e.file && e.state === 'ready' && !e.dupe).length;
+    const todo = entries.filter((e) => e.file && e.state === 'ready' && !e.dupe && !e.busy).length;
     btn.disabled = todo === 0;
     btn.textContent = todo > 0 ? `Tout importer (${todo})` : 'Tout importer';
   }
@@ -397,7 +398,7 @@ NC.packs = (() => {
 
   /* ── Pack « dossier » : les fichiers sont décrits dans l'index ── */
   async function loadFolderPack(pack) {
-    const seq = session.seq;
+    const { seq, abort } = session;
     for (const l of pack.livres || []) {
       if (!BOOK_RE.test(l.fichier) || JUNK_RE.test(l.fichier)) continue;
       const nom = l.fichier;
@@ -405,7 +406,9 @@ NC.packs = (() => {
       session.entries.set(nom, { file: null, meta: null, state: 'loading', tailleManifest: l.taille || 0 });
       addBookCard(nom, titreProvisoire);
       try {
-        const res = await fetch(pack.source + nom.split('/').map(encodeURIComponent).join('/'));
+        const res = await fetch(pack.source + nom.split('/').map(encodeURIComponent).join('/'), {
+          signal: abort.signal,
+        });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const blob = await res.blob();
         const file = new File([blob], nom.split('/').pop(), { type: blob.type });
@@ -428,10 +431,10 @@ NC.packs = (() => {
 
   /* ── Pack « zip » : l'archive est téléchargée puis dépliée ── */
   async function loadZipPack(pack) {
-    const seq = session.seq;
+    const { seq, abort } = session;
     const load = addLoadingCard();
     try {
-      const res = await fetch(pack.source, { cache: 'no-store' });
+      const res = await fetch(pack.source, { cache: 'no-store', signal: abort.signal });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const total = Number(res.headers.get('Content-Length')) || pack.taille || 0;
       let buf;
@@ -454,7 +457,6 @@ NC.packs = (() => {
       load.label('Décompression…');
       const zip = await JSZip.loadAsync(await buf.arrayBuffer());
       if (stale(seq, pack.id)) return;
-      session.zip = zip;
       load.remove();
       const noms = Object.keys(zip.files).filter((n) =>
         !zip.files[n].dir && BOOK_RE.test(n) && !JUNK_RE.test(n));
@@ -469,15 +471,23 @@ NC.packs = (() => {
       }
       updateImportAllBtn();
       for (const nom of noms) {
-        const base = nom.split('/').pop();
-        const blob = await zip.files[nom].async('blob');
-        const file = new File([blob], base, { type: /\.pdf$/i.test(nom) ? 'application/pdf' : 'application/epub+zip' });
-        const meta = await NC.library.peepFile(file);
-        if (stale(seq, pack.id)) return;
-        const st = session.entries.get(nom);
-        st.file = file; st.meta = meta; st.state = 'ready';
-        st.dupe = NC.library.looksKnown(sigs, meta.title, meta.author);
-        fillBookCard(nom, st);
+        try {
+          const base = nom.split('/').pop();
+          const blob = await zip.files[nom].async('blob');
+          if (stale(seq, pack.id)) return;
+          const file = new File([blob], base, { type: /\.pdf$/i.test(nom) ? 'application/pdf' : 'application/epub+zip' });
+          const meta = await NC.library.peepFile(file);
+          if (stale(seq, pack.id)) return;
+          const st = session.entries.get(nom);
+          st.file = file; st.meta = meta; st.state = 'ready';
+          st.dupe = NC.library.looksKnown(sigs, meta.title, meta.author);
+          fillBookCard(nom, st);
+        } catch (err) {
+          if (stale(seq, pack.id)) return;
+          const st = session.entries.get(nom);
+          st.error = true; st.state = 'error';
+          failBookCard(nom, err);
+        }
         updateDetailSub();
         updateImportAllBtn();
       }
@@ -521,52 +531,64 @@ NC.packs = (() => {
   /* ── Imports ── */
   async function addOne(key) {
     if (!session) return;
-    const st = session.entries.get(key);
+    const active = session;
+    const st = active.entries.get(key);
     if (!st || !st.file || st.state !== 'ready' || st.busy || st.dupe) return;
     setBusy(key, true);
+    updateImportAllBtn();
     try {
       await NC.library.importOne(st.file, st.meta, { quiet: true });
-      sigs.push({ t: NC.foldText(st.meta.title || ''), a: NC.foldText(st.meta.author || '') });
-      markAdded(key);
+      if (session === active) {
+        sigs.push({ t: NC.foldText(st.meta.title || ''), a: NC.foldText(st.meta.author || '') });
+        markAdded(key);
+      }
       NC.toast(`« ${st.meta.title || key} » ajouté à la bibliothèque.`, 'success');
       NC.library.refresh();
     } catch (e) {
       NC.toast(`« ${st.meta.title || key} » n\u2019a pas pu être ajouté — ${NC.library.shortReason(e)}.`, 'error');
     }
-    setBusy(key, false);
-    updateImportAllBtn();
+    if (session === active) {
+      setBusy(key, false);
+      updateImportAllBtn();
+    }
   }
 
   async function importAll() {
     if (!session) return;
-    const todo = Array.from(session.entries.entries())
+    const active = session;
+    const todo = Array.from(active.entries.entries())
       .filter(([, st]) => st.file && st.state === 'ready' && !st.dupe && !st.busy);
     if (!todo.length) return;
+    for (const [key] of todo) setBusy(key, true);
+    updateImportAllBtn();
     const prog = NC.toastHold('Import du pack…');
     let ok = 0;
     const fails = [];
     for (let i = 0; i < todo.length; i++) {
       const [key, st] = todo[i];
       prog.update(`Import du pack — ${i + 1}/${todo.length} : « ${st.meta.title || key} »`);
-      setBusy(key, true);
       try {
         await NC.library.importOne(st.file, st.meta, { quiet: true });
-        sigs.push({ t: NC.foldText(st.meta.title || ''), a: NC.foldText(st.meta.author || '') });
         ok++;
-        markAdded(key);
+        if (session === active) {
+          sigs.push({ t: NC.foldText(st.meta.title || ''), a: NC.foldText(st.meta.author || '') });
+          markAdded(key);
+        }
       } catch (e) {
         fails.push(`${st.meta.title || key} (${NC.library.shortReason(e)})`);
       }
-      setBusy(key, false);
+      if (session === active) setBusy(key, false);
     }
-    const dupes = Array.from(session.entries.values()).filter((e) => e.dupe).length;
+    const dupes = Array.from(active.entries.values()).filter((e) => e.dupe).length;
     const bits = [`${ok} ${ok > 1 ? 'livres ajoutés' : 'livre ajouté'}`];
     if (dupes) bits.push(`${dupes} ${dupes > 1 ? 'étaient' : 'était'} déjà dans la bibliothèque`);
     if (fails.length) bits.push(`${fails.length} en échec : ${fails.slice(0, 2).join(' ; ')}${fails.length > 2 ? '…' : ''}`);
     prog.done(bits.join(' · '), fails.length ? 'error' : 'success', 6000);
     await NC.library.refresh();
-    updateDetailSub();
-    updateImportAllBtn();
+    if (session === active) {
+      updateDetailSub();
+      updateImportAllBtn();
+    }
   }
 
   const initials = (title) => {

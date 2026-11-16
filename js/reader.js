@@ -32,6 +32,7 @@ NC.reader = (() => {
   let statsLastTick = 0;            // dernier crédit horaire
   let statsPendingSec = 0;          // secondes accumulées, pas encore écrites en base
   let statsPendingPages = 0;        // pages accumulées, pas encore écrites en base
+  const statsRetry = new Map();     // écritures échouées, par livre et par jour
   let statsPageKey = '';            // dernière position comptée (anti-doublon de re-rendu)
   let statsTickN = 0;               // ticks depuis la dernière écriture
 
@@ -180,7 +181,9 @@ NC.reader = (() => {
     ctl._onRelocated = onRelocated;
     /* Signets (n°8) : cache du livre courant, chargé une fois par
        ouverture ; l'historique (n°9) repart d'une session fraîche. */
-    bookmarkCache = await NC.db.bookmarksFor(rec.id).catch(() => []);
+    const bookmarks = await NC.db.bookmarksFor(rec.id).catch(() => []);
+    if (gen !== openGen) return;
+    bookmarkCache = bookmarks;
     visit = null;
     updateBookmarkBtn();
     trackPosition(); // première position de la session (déjà connue pour le PDF)
@@ -194,7 +197,7 @@ NC.reader = (() => {
     /* Mode concentration : réglage GLOBAL (préférence de session de
        lecture), restauré silencieusement à chaque ouverture. */
     NC.db.getSetting('focusMode', 'off')
-      .then((v) => { if (ctl) applyFocus(v === 'on', { persist: false, quiet: true }); })
+      .then((v) => { if (gen === openGen && ctl) applyFocus(v === 'on', { persist: false, quiet: true }); })
       .catch(() => {});
 
     // Reprise de lecture (basée sur les valeurs réellement restaurées)
@@ -849,22 +852,30 @@ NC.reader = (() => {
        ne mélangent jamais les compteurs de deux livres. */
     const sec = Math.round(statsPendingSec);
     const pg = Math.round(statsPendingPages);
-    if (!sec && !pg) return;
     statsPendingSec -= sec;
     statsPendingPages -= pg;
-    try {
+    if (sec || pg) {
       const date = NC.todayKey();
-      const row = (await NC.db.getReadStat(bookId + '|' + date))
-        || { id: bookId + '|' + date, bookId, date, seconds: 0, pages: 0, firstAt: 0 };
-      row.seconds = (row.seconds || 0) + sec;
-      row.pages = (row.pages || 0) + pg;
-      if (!row.firstAt) row.firstAt = Date.now();
-      row.lastAt = Date.now();
-      await NC.db.putReadStat(row);
-    } catch (e) {
-      // écriture ratée : remis en attente, le prochain flush réessaie
-      statsPendingSec += sec;
-      statsPendingPages += pg;
+      const now = Date.now();
+      queueStats({ id: bookId + '|' + date, bookId, date, seconds: sec, pages: pg, firstAt: now, lastAt: now });
+    }
+    const pending = Array.from(statsRetry.values());
+    statsRetry.clear();
+    await Promise.all(pending.map((sample) => NC.db.addReadStat(sample).catch((err) => {
+      console.warn('Statistiques de lecture en attente', err);
+      queueStats(sample);
+    })));
+  }
+
+  function queueStats(sample) {
+    const prior = statsRetry.get(sample.id);
+    if (prior) {
+      prior.seconds += sample.seconds;
+      prior.pages += sample.pages;
+      prior.firstAt = Math.min(prior.firstAt, sample.firstAt);
+      prior.lastAt = Math.max(prior.lastAt, sample.lastAt);
+    } else {
+      statsRetry.set(sample.id, sample);
     }
   }
 
@@ -2024,8 +2035,14 @@ NC.reader = (() => {
 
   /* ── Plein écran ── */
   function toggleFullscreen() {
-    if (document.fullscreenElement) document.exitFullscreen();
-    else document.documentElement.requestFullscreen().catch(() => {});
+    const root = document.documentElement;
+    if (document.fullscreenElement && document.exitFullscreen) {
+      document.exitFullscreen().catch(() => {});
+    } else if (root.requestFullscreen) {
+      root.requestFullscreen().catch(() => NC.toast('Le plein écran est indisponible.', 'info'));
+    } else {
+      NC.toast('Le plein écran est indisponible dans ce navigateur.', 'info');
+    }
   }
 
   /* ── Mode concentration (ajout n°5) ──

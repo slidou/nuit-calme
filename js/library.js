@@ -127,12 +127,16 @@ NC.library = (() => {
      montrer sa vraie jaquette avant tout ajout). */
   async function peepEpub(buf) {
     let title = '', author = '', cover = null;
-    const book = ePub(buf.slice(0));
+    const book = ePub();
+    let deadline;
     try {
-      const meta = await Promise.race([
-        book.loaded.metadata,
-        new Promise((_, rej) => setTimeout(() => rej(new Error('délai dépassé')), 15000)),
+      await Promise.race([
+        Promise.all([book.open(buf), book.ready, book.opened]),
+        new Promise((_, reject) => {
+          deadline = setTimeout(() => reject(new Error('délai dépassé')), 15000);
+        }),
       ]);
+      const meta = await book.loaded.metadata;
       if (meta && meta.title) title = meta.title;
       if (meta && meta.creator) author = meta.creator;
       try {
@@ -143,6 +147,7 @@ NC.library = (() => {
         }
       } catch (e) { /* pas de couverture */ }
     } finally {
+      clearTimeout(deadline);
       try { book.destroy(); } catch (e) {}
     }
     return { title, author, cover };
@@ -150,8 +155,9 @@ NC.library = (() => {
 
   async function peepPdf(buf) {
     let title = '', author = '', cover = null;
-    const doc = await pdfjsLib.getDocument({ data: buf.slice(0) }).promise;
+    const task = pdfjsLib.getDocument({ data: buf.slice(0), isEvalSupported: false });
     try {
+      const doc = await task.promise;
       try {
         const info = await doc.getMetadata();
         if (info && info.info) {
@@ -161,7 +167,7 @@ NC.library = (() => {
       } catch (e) {}
       try { cover = await renderPdfCover(doc); } catch (e) {}
     } finally {
-      doc.destroy();
+      await task.destroy().catch(() => {});
     }
     return { title, author, cover };
   }
@@ -257,19 +263,11 @@ NC.library = (() => {
      fichier lui-même est illisible — l'appelant fait le récit. */
   async function extractOriginalCover(book) {
     if (book.type === 'pdf') {
-      const doc = await pdfjsLib.getDocument({ data: book.data.slice(0) }).promise;
-      try { return await renderPdfCover(doc); }
-      finally { try { doc.destroy(); } catch (e) {} }
+      const task = pdfjsLib.getDocument({ data: book.data.slice(0), isEvalSupported: false });
+      try { return await renderPdfCover(await task.promise); }
+      finally { await task.destroy().catch(() => {}); }
     }
-    const eb = ePub(book.data.slice(0));
-    try {
-      const url = await eb.coverUrl();
-      if (!url) return null;
-      const blobCover = await (await fetch(url)).blob();
-      return await blobToDataUrl(blobCover);
-    } finally {
-      try { eb.destroy(); } catch (e) {}
-    }
+    return (await peepEpub(book.data)).cover;
   }
 
   function makeRecord({ title, author, type, cover, data, size }) {

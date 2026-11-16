@@ -8,7 +8,11 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
 
 NC.openPdf = async function (rec, opts) {
   const stage = NC.$('#pdf-stage');
-  const doc = await pdfjsLib.getDocument({ data: rec.data.slice(0) }).promise;
+  const task = pdfjsLib.getDocument({ data: rec.data.slice(0), isEvalSupported: false });
+  const doc = await task.promise.catch(async (error) => {
+    await task.destroy().catch(() => {});
+    throw error;
+  });
   /* Surlignages (n°5) : cache des annotations du livre, chargé une
      fois par ouverture — même magasin « annotations » que l'EPUB. */
   const annCache = await NC.db.annotationsFor(rec.id).catch(() => []);
@@ -55,6 +59,7 @@ NC.openPdf = async function (rec, opts) {
     if (!tc) {
       tc = await page.getTextContent();
       if (gen !== renderGen) return; // rendu obsolète entre-temps
+      if (textCache.size >= 24) textCache.delete(textCache.keys().next().value);
       textCache.set(pnum, tc);
     }
     /* pdf.js 3.11 dimensionne le calque via --scale-factor (calc sur les
@@ -904,11 +909,6 @@ NC.openPdf = async function (rec, opts) {
 
   ctl.resize = () => { keepScroll(); return render(); };
 
-  /* ── Ouverture ── */
-  stage.hidden = false;
-  await render();
-  await ctl.loadToc();
-
   ctl.destroy = () => {
     renderGen++; // invalide tout rendu encore en vol
     ctl._tasks.forEach((t) => { try { t.cancel(); } catch (e) {} });
@@ -927,9 +927,19 @@ NC.openPdf = async function (rec, opts) {
     }
     if (wheelTimer) { clearTimeout(wheelTimer); wheelTimer = null; }
     textCache.clear();
-    try { doc.destroy(); } catch (e) {}
+    task.destroy().catch((err) => console.warn('Fermeture du PDF', err));
     stage.innerHTML = '';
   };
+
+  /* ── Ouverture ── */
+  stage.hidden = false;
+  try {
+    await render();
+    await ctl.loadToc();
+  } catch (error) {
+    ctl.destroy();
+    throw error;
+  }
 
   return ctl;
 };

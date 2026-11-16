@@ -186,7 +186,7 @@ img{ display:block; }
   transition:background .15s, color .15s;
 }
 .card-del svg{ width:13px; height:13px; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; }
-.card:hover .card-del, .card-del:focus-visible{ display:flex; }
+.card:hover .card-del, .card:focus-within .card-del{ display:flex; }
 .card-del:hover{ color:#f2b0a3; border-color:rgba(201,106,90,.5); }
 .card-del.confirm{ display:flex; color:#f2b0a3; border-color:var(--danger); background:rgba(201,106,90,.15); }
 
@@ -1120,7 +1120,7 @@ body[data-flow="scrolled"] #epub-host .epub-container::-webkit-scrollbar-thumb:h
   transition:background .15s, color .15s;
 }
 .card-menu svg{ width:13px; height:13px; fill:currentColor; stroke:none; }
-.card:hover .card-menu, .card-menu:focus-visible{ display:flex; }
+.card:hover .card-menu, .card:focus-within .card-menu{ display:flex; }
 .card-menu:hover{ color:var(--gold-soft); border-color:var(--gold-dim); }
 
 /* ── Bouton crayon d'édition de la fiche (V2.20) ──
@@ -1134,7 +1134,10 @@ body[data-flow="scrolled"] #epub-host .epub-container::-webkit-scrollbar-thumb:h
   transition:background .15s, color .15s;
 }
 .card-edit svg{ width:13px; height:13px; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
-.card:hover .card-edit, .card-edit:focus-visible{ display:flex; }
+.card:hover .card-edit, .card:focus-within .card-edit{ display:flex; }
+@media (hover: none){
+  .card .card-del, .card .card-menu, .card .card-edit{ display:flex; }
+}
 .card-edit:hover{ color:var(--gold-soft); border-color:var(--gold-dim); }
 
 /* ── Menu de rangement (popover d'une carte) ── */

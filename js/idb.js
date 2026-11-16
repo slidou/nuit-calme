@@ -5,12 +5,16 @@ window.NC = window.NC || {};
 NC.db = (() => {
   const NAME = 'nuit-calme-db';
   const VERSION = 7;
+  const BACKUP_STORES = ['books', 'annotations', 'bookmarks', 'history',
+    'readstats', 'progress', 'prefs', 'bookmeta', 'groups', 'settings'];
+  const BACKUP_TIMESTAMPS = { progress: 'lastOpened', prefs: 'updatedAt', bookmeta: 'updatedAt' };
   let dbPromise = null;
 
   function open() {
     if (dbPromise) return dbPromise;
     dbPromise = new Promise((resolve, reject) => {
       const req = indexedDB.open(NAME, VERSION);
+      let blocked = false;
       req.onupgradeneeded = () => {
         const db = req.result;
         if (!db.objectStoreNames.contains('books')) db.createObjectStore('books', { keyPath: 'id' });
@@ -59,13 +63,21 @@ NC.db = (() => {
       };
       req.onsuccess = () => {
         const db = req.result;
+        if (blocked) { db.close(); return; }
         // Un autre onglet demande une montée de version : on libère la
         // connexion au lieu de bloquer indéfiniment sa mise à niveau.
-        db.onversionchange = () => { try { db.close(); } catch (e) {} };
+        db.onversionchange = () => {
+          db.close();
+          dbPromise = null;
+        };
+        db.onclose = () => { dbPromise = null; };
         resolve(db);
       };
       req.onerror = () => reject(req.error);
-      req.onblocked = () => reject(new Error('IndexedDB bloqué par un autre onglet'));
+      req.onblocked = () => {
+        blocked = true;
+        reject(new Error('IndexedDB bloqué par un autre onglet'));
+      };
     }).catch((err) => {
       // Échec d'ouverture : on réinitialise pour que la prochaine demande
       // retente proprement au lieu de rejouer une promesse rejetée.
@@ -85,7 +97,7 @@ NC.db = (() => {
       const s = t.objectStore(store);
       let out;
       try { out = fn(s); }
-      catch (e) { reject(e); return; }
+      catch (e) { t.abort(); reject(e); return; }
       t.oncomplete = () => resolve(out && out.result !== undefined ? out.result : out);
       t.onerror = () => reject(t.error);
       t.onabort = () => reject(t.error);
@@ -104,6 +116,63 @@ NC.db = (() => {
   }
 
   return {
+    backupSnapshot: () => open().then((db) => new Promise((resolve, reject) => {
+      const t = db.transaction(BACKUP_STORES, 'readonly');
+      const state = {};
+      t.oncomplete = () => resolve(state);
+      t.onabort = () => reject(t.error);
+      for (const name of BACKUP_STORES) {
+        const request = t.objectStore(name).getAll();
+        request.onsuccess = () => { state[name] = request.result; };
+      }
+    })),
+    restoreBackup: (state, replace) => open().then((db) => new Promise((resolve, reject) => {
+      const t = db.transaction(BACKUP_STORES, 'readwrite');
+      const counts = { booksAdded: 0, booksKept: 0 };
+      t.oncomplete = () => resolve(counts);
+      t.onabort = () => reject(t.error || new Error('Restauration annulée'));
+
+      function write(store, row, count) {
+        try {
+          store.put(row);
+          if (count) counts[count]++;
+        } catch (err) {
+          t.abort();
+          reject(err);
+        }
+      }
+
+      try {
+        for (const name of BACKUP_STORES) {
+          const store = t.objectStore(name);
+          const count = name === 'books' ? 'booksAdded' : name;
+          const timestamp = BACKUP_TIMESTAMPS[name];
+          counts[count] = 0;
+          if (replace) store.clear();
+          for (const row of state[name]) {
+            if (replace) {
+              store.put(row);
+              counts[count]++;
+              continue;
+            }
+            const request = store.get(row[store.keyPath]);
+            request.onsuccess = () => {
+              const local = request.result;
+              if (!local || (timestamp && (row[timestamp] || 0) > (local[timestamp] || 0))) {
+                write(store, row, count);
+              } else if (name === 'books') {
+                counts.booksKept++;
+                if (!local.cover && row.cover) write(store, { ...local, cover: row.cover });
+              }
+            };
+          }
+        }
+      } catch (err) {
+        t.abort();
+        reject(err);
+      }
+    })),
+    countBooks: () => reqToPromise('books', 'readonly', (s) => s.count()),
     allBooks: () => reqToPromise('books', 'readonly', (s) => s.getAll()),
     getBook: (id) => reqToPromise('books', 'readonly', (s) => s.get(id)),
     putBook: (book) => tx('books', 'readwrite', (s) => s.put(book)),
@@ -229,8 +298,19 @@ NC.db = (() => {
        { id: 'livre|2026-11-10', bookId, date, seconds, pages, firstAt, lastAt }.
        Le suivi de lecture écrit par additions (get → additionner → put) :
        plusieurs sessions le même jour se cumulent, jamais d'écrasement. */
-    getReadStat: (id) => reqToPromise('readstats', 'readonly', (s) => s.get(id)),
-    putReadStat: (row) => tx('readstats', 'readwrite', (s) => s.put(row)),
+    addReadStat: (sample) => tx('readstats', 'readwrite', (s) => {
+      const r = s.get(sample.id);
+      r.onsuccess = () => {
+        const row = r.result || sample;
+        if (r.result) {
+          row.seconds = (row.seconds || 0) + sample.seconds;
+          row.pages = (row.pages || 0) + sample.pages;
+          row.firstAt = Math.min(row.firstAt || sample.firstAt, sample.firstAt);
+          row.lastAt = Math.max(row.lastAt || 0, sample.lastAt);
+        }
+        s.put(row);
+      };
+    }),
     readStatsFor: (bookId) => reqToPromise('readstats', 'readonly', (s) =>
         s.indexNames.contains('bookId') ? s.index('bookId').getAll(bookId) : s.getAll())
       .then((all) => (Array.isArray(all) ? all : [])
@@ -252,20 +332,6 @@ NC.db = (() => {
 
     allGroups: () => reqToPromise('groups', 'readonly', (s) => s.getAll()),
     putGroup: (g) => tx('groups', 'readwrite', (s) => s.put(g)),
-    /* ── Remise à zéro complète (V2.25 — restauration « Remplacer ») ──
-       Une transaction unique vide les dix magasins : la bibliothèque
-       repart de zéro avant que la sauvegarde ne s'y réinstalle. Ni les
-       préférences d'affichage locales (filtres, tri — localStorage),
-       ni le service worker ne sont touchés. */
-    clearAll: () => open().then((db) => new Promise((resolve, reject) => {
-      const stores = ['books', 'annotations', 'progress', 'prefs', 'bookmarks',
-        'history', 'readstats', 'bookmeta', 'groups', 'settings'];
-      const t = db.transaction(stores, 'readwrite');
-      stores.forEach((s) => t.objectStore(s).clear());
-      t.oncomplete = () => resolve();
-      t.onerror = () => reject(t.error);
-      t.onabort = () => reject(t.error);
-    })),
     /* Supprimer un groupe rend ses livres : la même transaction retire
        le groupe ET démonte groupId sur les fiches concernées — aucun
        livre orphelin référençant un groupe disparu. */
