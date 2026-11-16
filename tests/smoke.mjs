@@ -15,23 +15,33 @@ const profile = await mkdtemp(join(tmpdir(), 'nuit-calme-test-'));
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
   '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2', '.png': 'image/png' };
 const baseline = process.env.NC_BENCHMARK && process.env.NC_BASE_REF;
+const migration = process.env.NC_MIGRATION === '1';
+const enableV8 = process.env.NC_TEST_V8 === '1';
+const v7Ref = '6295c66c57e474546c5c8986ac937bca921f3807';
 const baselineFiles = new Map();
 let release = 1;
+let fixtureUpgrade = false;
 let missingAsset = false;
 let missingRequests = 0;
 
 const server = createServer(async (req, res) => {
   const path = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+  if (migration && path === '/test-fixture') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end('<title>IndexedDB de test</title>');
+    return;
+  }
   if (!path.startsWith('/liseuse/')) { res.writeHead(404).end(); return; }
   const file = resolve(root, path.slice('/liseuse/'.length) || 'index.html');
   if (!file.startsWith(resolve(root) + sep)) { res.writeHead(403).end(); return; }
   if (missingAsset && path.endsWith('/css/style.css')) { missingRequests++; res.writeHead(503).end(); return; }
   try {
     let body;
-    if (baseline) {
+    const legacyOrigin = migration && req.headers.host?.startsWith('localhost:');
+    const ref = baseline || (migration && (release === 1 || legacyOrigin) && v7Ref);
+    if (ref) {
       const relative = file.slice(resolve(root).length + 1).split(sep).join('/');
       if (!baselineFiles.has(relative)) baselineFiles.set(relative, execFileSync(
-        'git', ['show', `${baseline}:${relative}`], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 8 << 20 }));
+        'git', ['show', `${ref}:${relative}`], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 8 << 20 }));
       body = baselineFiles.get(relative);
     } else {
       body = await readFile(file);
@@ -39,6 +49,10 @@ const server = createServer(async (req, res) => {
         body = body.toString().replace('</head>', `<meta name="test-release" content="${release}"></head>`);
       } else if (file === join(root, 'sw.js') && release > 1) {
         body = body.toString().replace(/(const CACHE = .+?)';/, `$1-test-${release}';`);
+      } else if (file === join(root, 'js', 'idb.js') && (enableV8 || fixtureUpgrade)) {
+        const disabled = 'const ENABLE_V8_UPGRADE = false;';
+        assert.ok(body.toString().includes(disabled));
+        body = body.toString().replace(disabled, 'const ENABLE_V8_UPGRADE = true;');
       }
     }
     res.writeHead(200, { 'Content-Type': types[extname(file)] || 'application/octet-stream' }).end(body);
@@ -120,10 +134,13 @@ async function benchmark(cdp) {
     });
     observer.observe(document, { childList: true, subtree: true });
   ` });
-  console.log(JSON.stringify({ source: baseline || 'workspace', bytesPerBook: 131072, iterations: 3 }));
-  for (const count of [100, 300, 1000]) {
+  const browserVersion = await cdp.send('Browser.getVersion');
+  console.log(JSON.stringify({ source: baseline || (enableV8 ? 'workspace-v8' : 'workspace-v7'),
+    browser: browserVersion.product, bytesPerBook: 131072, iterations: 3 }));
+  for (const count of [100, 300, 1000, 3000]) {
     await cdp.run(`(async () => {
-      const state = await NC.db.backupSnapshot();
+      const state = { annotations: [], bookmarks: [], history: [], readstats: [], progress: [],
+        prefs: [], settings: [] };
       const data = new ArrayBuffer(131072);
       const cover = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="160" height="220"%3E%3Crect width="160" height="220" fill="navy"/%3E%3C/svg%3E';
       state.books = Array.from({length: ${count}}, (_, i) => ({
@@ -142,7 +159,6 @@ async function benchmark(cdp) {
         const grid = document.querySelector('#book-grid');
         const frame = () => new Promise(requestAnimationFrame);
         await frame();
-        const boot = window.firstCardMs;
         while (grid.childElementCount < ${count}) await frame();
         const input = document.querySelector('#lib-search');
         input.value = 'Volume';
@@ -151,7 +167,7 @@ async function benchmark(cdp) {
         while (!document.querySelector('#lib-count').textContent.includes(' sur ')) await frame();
         const first = performance.now() - start;
         while (grid.childElementCount < ${count}) await frame();
-        return { boot, first, full: performance.now() - start };
+        return { boot: window.firstCardMs, first, full: performance.now() - start };
       })()`);
       await cdp.send('HeapProfiler.collectGarbage');
       const heap = await cdp.send('Runtime.getHeapUsage');
@@ -168,6 +184,301 @@ async function openTab(cdp, port, url) {
     return (await response.json()).find((tab) => tab.id === targetId);
   });
   return { targetId, tab: await connect(target.webSocketDebuggerUrl) };
+}
+
+async function makeBooks() {
+  const epub = new JSZip();
+  epub.file('mimetype', 'application/epub+zip');
+  epub.file('META-INF/container.xml', '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>');
+  epub.file('book.opf', '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">epub-essai</dc:identifier><dc:title>EPUB essai</dc:title><dc:language>fr</dc:language></metadata><manifest><item id="page" href="page.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="page"/></spine></package>');
+  epub.file('page.xhtml', '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Essai</title></head><body><p>Le phare illumine la nuit.</p></body></html>');
+  const epubBlob = await epub.generateAsync({ type: 'blob' });
+
+  const content = 'BT /F1 16 Tf 40 80 Td (Le phare illumine la nuit.) Tj ET\n';
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${content.length} >>\nstream\n${content}endstream`,
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+  ];
+  let pdf = '%PDF-1.4\n';
+  const offsets = objects.map((object, index) => {
+    const offset = pdf.length;
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+    return offset;
+  });
+  const xref = pdf.length;
+  pdf += 'xref\n0 7\n0000000000 65535 f \n' +
+    offsets.map((o) => String(o).padStart(10, '0') + ' 00000 n \n').join('') +
+    `trailer\n<< /Root 1 0 R /Size 7 >>\nstartxref\n${xref}\n%%EOF\n`;
+  return { epubBlob, pdf };
+}
+
+async function rawCatalog() {
+  const request = (operation) => new Promise((resolve, reject) => {
+    operation.onsuccess = () => resolve(operation.result);
+    operation.onerror = () => reject(operation.error);
+  });
+  const db = await request(indexedDB.open('nuit-calme-db'));
+  try {
+    if (db.version === 7) return { version: db.version };
+    const transaction = db.transaction(['books', 'bookcards', 'catalogstate']);
+    const [bookKeys, cards, checkpoint] = await Promise.all([
+      request(transaction.objectStore('books').getAllKeys()),
+      request(transaction.objectStore('bookcards').getAll()),
+      request(transaction.objectStore('catalogstate').get('build')),
+    ]);
+    return { version: db.version, bookKeys, cards, checkpoint };
+  } finally { db.close(); }
+}
+
+async function fingerprint() {
+  const snapshot = await NC.db.backupSnapshot();
+  snapshot.books = await Promise.all(snapshot.books.map(async ({ data, ...metadata }) => {
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+    return { metadata, sha256: Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('') };
+  }));
+  return snapshot;
+}
+
+async function exportBase64() {
+  const { blob, manifest } = await NC.backup.exportAll({ silent: true });
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const parts = [];
+  for (let i = 0; i < bytes.length; i += 16384) parts.push(String.fromCharCode(...bytes.subarray(i, i + 16384)));
+  return { archive: btoa(parts.join('')), manifest };
+}
+
+function zipExpression(archive) {
+  return `new Blob([Uint8Array.from(atob(${JSON.stringify(archive)}), c => c.charCodeAt(0))])`;
+}
+
+async function testMigration(cdp, port) {
+  const fingerprintExpression = `(${fingerprint})()`;
+  const catalogExpression = `(${rawCatalog})()`;
+  assert.deepEqual(await cdp.run(catalogExpression), { version: 7 });
+  const ids = await cdp.run(`(${async function seed(fixture) {
+    const { epubBlob, pdf } = await fixture();
+    await NC.library.importFiles([
+      new File([epubBlob], 'egalite.epub', { type: 'application/epub+zip' }),
+      new File([pdf], 'egalite.pdf', { type: 'application/pdf' }),
+    ]);
+    const initial = await NC.db.allBooks();
+    const epub = initial.find((book) => book.type === 'epub');
+    const paper = initial.find((book) => book.type === 'pdf');
+    await NC.db.putSetting('spread', 'none');
+    await NC.reader.open(epub.id);
+    const ctl = NC.reader._state().ctl;
+    for (let i = 0; !ctl.location?.start?.cfi && i < 50; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await NC.reader.close();
+    const cfi = (await NC.db.getProgress(epub.id)).lastCfi;
+    await NC.db.putAnnotation({ id: 'note-v7', bookId: epub.id, kind: 'note', text: 'Le phare',
+      sectionIndex: 0, start: 0, end: 8, cfi, note: 'Note historique', createdAt: 20 });
+    await NC.db.putBookmark({ id: 'signet-v7', bookId: paper.id, page: 2, createdAt: 20 });
+    await NC.db.putHistory({ id: 'passage-v7', bookId: paper.id, page: 2, at: 20 });
+    await NC.db.putProgress({ id: paper.id, lastOpened: Date.now(), lastPage: 2, fit: 'page', zoom: 1 });
+    await NC.db.patchPrefs(epub.id, { theme: 'sepia', fontSize: 125 });
+    await NC.db.addReadStat({ id: 'stat-v7', bookId: paper.id, date: '2026-01-01', pages: 3,
+      seconds: 15, firstAt: 20, lastAt: 30 });
+    await NC.db.putGroup({ id: 'rayon-v7', name: 'Rayon témoin' });
+    await NC.db.changeBookMeta(paper.id, { status: 'termine', groupId: 'rayon-v7' });
+    localStorage.setItem('nc.reading-goal', JSON.stringify({ target: 5, start: '2026-01-01', end: '2026-12-31' }));
+    const snapshot = await NC.db.backupSnapshot();
+    snapshot.books.push(...Array.from({ length: 44 }, (_, i) => ({
+      ...epub, id: 'temoin-' + String(i).padStart(3, '0'), title: 'Témoin ' + i,
+      legacyField: 'champ v7 à préserver',
+    })));
+    await NC.db.restoreBackup(snapshot, true);
+    return { epub: epub.id, pdf: paper.id, cfi };
+  }})(${makeBooks})`);
+  assert.ok(ids.cfi.startsWith('epubcfi('));
+  // L'écriture des statistiques de la session EPUB doit être terminée avant la référence.
+  const before = await cdp.run(fingerprintExpression);
+  const zipV7 = await cdp.run(`(${exportBase64})()`);
+  assert.equal(zipV7.manifest.format, 1);
+
+  const fixtureUrl = new URL('/test-fixture', url).href;
+  const lock = await openTab(cdp, port, fixtureUrl);
+  try {
+    assert.equal(await lock.tab.run(`new Promise((resolve, reject) => {
+      const request = indexedDB.open('nuit-calme-db', 7);
+      request.onsuccess = () => { window.heldDatabase = request.result; resolve(heldDatabase.version); };
+      request.onerror = reject;
+    })`), 7);
+    release = 2;
+    fixtureUpgrade = true;
+    await cdp.send('Page.enable');
+    await cdp.send('Network.enable');
+    await cdp.send('Network.setBypassServiceWorker', { bypass: true });
+    await cdp.send('Page.navigate', { url: url + '?blocked' });
+    await until(() => cdp.run("location.search === '?blocked' && window.__ncErrors?.some(value => /bloqué/.test(value))"));
+    await lock.tab.run('heldDatabase.close()');
+    assert.deepEqual(await lock.tab.run(catalogExpression), { version: 7 });
+    console.log('OK — connexion v7 ouverte, montée bloquée puis annulée.');
+  } finally {
+    await cdp.send('Target.closeTarget', { targetId: lock.targetId });
+    lock.tab.close();
+  }
+
+  await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `
+    if (location.search === '?quota-migration') {
+      const put = IDBObjectStore.prototype.put;
+      let writes = 0;
+      IDBObjectStore.prototype.put = function (...args) {
+        if (this.name === 'bookcards' && ++writes === 17) {
+          window.quotaInjected = true;
+          throw new DOMException('Échec au deuxième lot', 'QuotaExceededError');
+        }
+        return put.apply(this, args);
+      };
+    }
+    if (location.search === '?migration-verified') {
+      const getAll = IDBObjectStore.prototype.getAll;
+      IDBObjectStore.prototype.getAll = function (...args) {
+        if (this.name === 'books') throw new Error('Relecture interdite des binaires au démarrage');
+        return getAll.apply(this, args);
+      };
+    }
+  ` });
+  await cdp.send('Page.bringToFront');
+  await cdp.send('Page.navigate', { url: url + '?quota-migration' });
+  await until(() => cdp.run('window.quotaInjected === true && document.querySelectorAll(".card").length === 46'));
+  const partial = await cdp.run(catalogExpression);
+  assert.equal(partial.version, 8);
+  assert.equal(partial.bookKeys.length, 46);
+  assert.equal(partial.cards.length, 16);
+  assert.equal(partial.checkpoint.after, partial.cards.at(-1).id);
+  assert.deepEqual(await cdp.run(fingerprintExpression), before);
+  console.log('OK — v7 → v8, deuxième lot annulé au quota, 16 fiches validées et données historiques identiques.');
+
+  // Écritures effectuées avant et après la clé de reprise.
+  await cdp.run(`(async () => {
+    const source = await NC.db.getBook('temoin-000');
+    await NC.db.deleteBookCascade(source.id);
+    await NC.db.putBook({ ...source, id: '0-ajout-pendant-la-migration', title: 'Inséré avant le point de reprise' });
+    await NC.db.patchBook('temoin-001', { title: 'Modifié avant le point de reprise' });
+    await NC.db.patchBook('temoin-043', { title: 'Modifié après le point de reprise' });
+  })()`);
+  const interrupted = await cdp.run(fingerprintExpression);
+
+  const second = await openTab(cdp, port, 'about:blank');
+  try {
+    await second.tab.send('Network.enable');
+    await second.tab.send('Network.setBypassServiceWorker', { bypass: true });
+    await Promise.all([
+      second.tab.send('Page.navigate', { url: url + '?resume-second' }),
+      cdp.send('Page.navigate', { url: url + '?resume-first' }),
+    ]);
+    await until(() => cdp.run("location.search === '?resume-first' && typeof NC_DEBUG !== 'undefined'"));
+    const completed = await until(async () => {
+      const state = await cdp.run(catalogExpression);
+      return state.checkpoint?.done && state;
+    });
+    assert.deepEqual(completed.cards.map((card) => card.id), completed.bookKeys);
+    assert.ok(completed.cards.every((card) => !Object.hasOwn(card, 'data')));
+    assert.deepEqual(await cdp.run(fingerprintExpression), interrupted);
+    assert.ok(completed.cards.some((card) => card.title === 'Inséré avant le point de reprise'));
+    assert.ok(completed.cards.some((card) => card.title === 'Modifié avant le point de reprise'));
+    assert.ok(completed.cards.some((card) => card.title === 'Modifié après le point de reprise'));
+    assert.ok(!completed.cards.some((card) => card.id === 'temoin-000'));
+    console.log('OK — reprise à deux onglets après navigation et bijection des 46 fiches et fichiers.');
+
+    const paper = JSON.stringify(ids.pdf);
+    const epub = JSON.stringify(ids.epub);
+    await Promise.all([
+      cdp.run(`NC.db.patchBook(${paper}, { title: 'PDF v8' })`),
+      second.tab.run(`NC.db.patchBook(${paper}, { author: 'Deuxième onglet' })`),
+    ]);
+    const changed = (await cdp.run(catalogExpression)).cards.find((card) => card.id === ids.pdf);
+    assert.equal(changed.title, 'PDF v8');
+    assert.equal(changed.author, 'Deuxième onglet');
+    const rejected = await cdp.run(`(async () => {
+      const nativePut = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function (...args) {
+        if (this.name === 'bookcards') throw new DOMException('Catalogue plein', 'QuotaExceededError');
+        return nativePut.apply(this, args);
+      };
+      try { await NC.db.patchBook(${paper}, {title:'perdu'}); }
+      catch (error) { return error.name; }
+      finally { IDBObjectStore.prototype.put = nativePut; }
+    })()`);
+    assert.equal(rejected, 'QuotaExceededError');
+    assert.equal(await cdp.run(`NC.db.getBook(${paper}).then(book => book.title)`), 'PDF v8');
+    assert.equal((await cdp.run(catalogExpression)).cards.find((card) => card.id === ids.pdf).title, 'PDF v8');
+
+    await cdp.run(`NC.backup.importFile(${zipExpression(zipV7.archive)}, 'merge')`);
+    assert.ok((await cdp.run(catalogExpression)).cards.some((card) => card.id === 'temoin-000'));
+    const beforeReject = await cdp.run(catalogExpression);
+    const failedReplace = await cdp.run(`(async () => {
+      const nativePut = IDBObjectStore.prototype.put;
+      let cardWrites = 0;
+      IDBObjectStore.prototype.put = function (...args) {
+        if (this.name === 'bookcards' && ++cardWrites === 2) throw new DOMException('Catalogue plein', 'QuotaExceededError');
+        return nativePut.apply(this, args);
+      };
+      try { await NC.backup.importFile(${zipExpression(zipV7.archive)}, 'replace'); }
+      catch (error) { return error.name; }
+      finally { IDBObjectStore.prototype.put = nativePut; }
+    })()`);
+    assert.equal(failedReplace, 'QuotaExceededError');
+    assert.deepEqual(await cdp.run(catalogExpression), beforeReject);
+    await cdp.run(`NC.backup.importFile(${zipExpression(zipV7.archive)}, 'replace')`);
+    assert.deepEqual(await cdp.run(fingerprintExpression), before);
+    const restored = await cdp.run(catalogExpression);
+    assert.deepEqual(restored.cards.map((card) => card.id), restored.bookKeys);
+    assert.equal(await cdp.run("JSON.parse(localStorage.getItem('nc.reading-goal')).target"), 5);
+    console.log('OK — édition atomique, annulation au quota, suppression, fusion et remplacement ZIP v1.');
+
+    // La version précédente est incapable d'ouvrir une base déjà montée vers v8.
+    assert.equal(await cdp.run(`new Promise((resolve) => {
+      const request = indexedDB.open('nuit-calme-db', 7);
+      request.onerror = () => resolve(request.error.name);
+      request.onsuccess = () => { request.result.close(); resolve('success'); };
+    })`), 'VersionError');
+
+    const zipV8 = await cdp.run(`(${exportBase64})()`);
+    assert.equal(zipV8.manifest.format, 1);
+    fixtureUpgrade = false;
+    await cdp.send('Page.bringToFront');
+    await cdp.send('Page.navigate', { url: url + '?migration-verified' });
+    await until(() => cdp.run("location.search === '?migration-verified' && document.querySelectorAll('.card').length === 46"));
+    assert.equal((await cdp.run(catalogExpression)).version, 8);
+    assert.equal(await cdp.run(`NC.db.getProgress(${epub}).then(row => row.lastCfi)`), ids.cfi);
+    const reading = await cdp.run(`(async () => {
+      await NC.reader.open(${epub});
+      const reader = NC.reader._state().ctl;
+      const result = { theme: reader.theme, size: reader.fontSize,
+        results: (await reader.search('phare')).length, notes: (await NC.db.annotationsFor(${epub})).map(note => note.note) };
+      await NC.reader.close();
+      await NC.reader.open(${paper});
+      result.pdfPage = NC.reader._state().ctl.page;
+      result.bookmarks = (await NC.db.bookmarksFor(${paper})).map(bookmark => bookmark.page);
+      await NC.reader.close();
+      return result;
+    })()`);
+    assert.equal(reading.theme, 'sepia');
+    assert.equal(reading.size, 125);
+    assert.ok(reading.results > 0);
+    assert.deepEqual(reading.notes, ['Note historique']);
+    assert.equal(reading.pdfPage, 2);
+    assert.deepEqual(reading.bookmarks, [2]);
+    console.log('OK — catalogue complet avec lectures de binaires bloquées au démarrage, repli v8, reprise EPUB/PDF.');
+
+    const legacyUrl = url.replace('127.0.0.1', 'localhost');
+    await second.tab.send('Page.navigate', { url: legacyUrl });
+    await until(() => second.tab.run("location.hostname === 'localhost' && typeof NC_DEBUG !== 'undefined'"));
+    assert.deepEqual(await second.tab.run(catalogExpression), { version: 7 });
+    await second.tab.run(`NC.backup.importFile(${zipExpression(zipV8.archive)}, 'replace')`);
+    assert.deepEqual(await second.tab.run(fingerprintExpression), before);
+    console.log('OK — un export du code v8 est restauré par le code v7 sur une autre origine de test.');
+  } finally {
+    await cdp.send('Target.closeTarget', { targetId: second.targetId });
+    second.tab.close();
+  }
 }
 
 let cdp;
@@ -187,36 +498,14 @@ try {
 
   if (process.env.NC_BENCHMARK) {
     await benchmark(cdp);
+  } else if (migration) {
+    await testMigration(cdp, port);
   } else {
 
-  const result = await cdp.run(`(${async function scenario() {
+  assert.equal((await cdp.run(`(${rawCatalog})()`)).version, enableV8 ? 8 : 7);
+  const result = await cdp.run(`(${async function scenario(fixture) {
     function check(condition, message) { if (!condition) throw new Error(message); }
-    const epub = new JSZip();
-    epub.file('mimetype', 'application/epub+zip');
-    epub.file('META-INF/container.xml', '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>');
-    epub.file('book.opf', '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">epub-essai</dc:identifier><dc:title>EPUB essai</dc:title><dc:language>fr</dc:language></metadata><manifest><item id="page" href="page.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="page"/></spine></package>');
-    epub.file('page.xhtml', '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Essai</title></head><body><p>Le phare illumine la nuit.</p></body></html>');
-    const epubBlob = await epub.generateAsync({ type: 'blob' });
-
-    const content = 'BT /F1 16 Tf 40 80 Td (Le phare illumine la nuit.) Tj ET\n';
-    const objects = [
-      '<< /Type /Catalog /Pages 2 0 R >>',
-      '<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>',
-      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
-      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-      `<< /Length ${content.length} >>\nstream\n${content}endstream`,
-      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
-    ];
-    let pdf = '%PDF-1.4\n';
-    const offsets = objects.map((object, index) => {
-      const offset = pdf.length;
-      pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
-      return offset;
-    });
-    const xref = pdf.length;
-    pdf += 'xref\n0 7\n0000000000 65535 f \n' +
-      offsets.map((o) => String(o).padStart(10, '0') + ' 00000 n \n').join('') +
-      `trailer\n<< /Root 1 0 R /Size 7 >>\nstartxref\n${xref}\n%%EOF\n`;
+    const { epubBlob, pdf } = await fixture();
     await NC.library.importFiles([
       new File([epubBlob], 'essai.epub', { type: 'application/epub+zip' }),
       new File([pdf], 'essai.pdf', { type: 'application/pdf' }),
@@ -339,7 +628,7 @@ try {
     check(getComputedStyle(firstCard.querySelector('.card-edit')).display === 'flex', 'Actions de carte au clavier');
     check(window.__ncErrors.length === 0, JSON.stringify(window.__ncErrors));
     return paper.id;
-  }})()`);
+  }})(${makeBooks})`);
   console.log('OK — EPUB et PDF, recherche, reprise PDF, sauvegarde, fusion, remplacement, retour arrière, statistiques.');
   console.log('OK — pack ZIP avec entrée invalide, import sans doublon et actions accessibles au focus.');
 
@@ -386,11 +675,11 @@ try {
     const state = await NC.db.backupSnapshot();
     const originalPut = IDBObjectStore.prototype.put;
     let writes = 0;
-    IDBObjectStore.prototype.put = function (value) {
+    IDBObjectStore.prototype.put = function (...args) {
       if (this.name === 'books' && ++writes === 2) {
         throw new DOMException('Quota de test', 'QuotaExceededError');
       }
-      return originalPut.call(this, value);
+      return originalPut.apply(this, args);
     };
     try { await NC.db.restoreBackup(state, true); }
     catch (error) { return error.name; }
