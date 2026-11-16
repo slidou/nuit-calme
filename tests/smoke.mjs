@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,9 +10,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { testNotebook } from './notebook.mjs';
 import { testProfiles } from './reading-profiles.mjs';
 import { testStats, benchmarkStats } from './reading-stats.mjs';
+import { testV3, testV3Package } from './finalisation-v3.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const browser = process.env.NC_BROWSER || (process.platform === 'win32'
+const chrome = process.argv.includes('--chrome');
+const browser = process.env.NC_BROWSER || (chrome ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' : process.platform === 'win32'
   ? 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
   : 'chromium');
 const profile = await mkdtemp(join(tmpdir(), 'nuit-calme-test-'));
@@ -21,6 +24,10 @@ const profiles = process.argv.includes('--profiles');
 const profilesBaseline = process.argv.includes('--profiles-baseline');
 const baseline = (process.env.NC_BENCHMARK && process.env.NC_BASE_REF) || (profilesBaseline && '5d00f6a');
 const migration = process.env.NC_MIGRATION === '1';
+const finalization = process.argv.includes('--v3');
+const bundlePath = process.argv.find((argument) => argument.startsWith('--bundle='))?.slice('--bundle='.length);
+const bundle = bundlePath ? await createRequire(import.meta.url)('../vendor/jszip.min.js')
+  .loadAsync(await readFile(bundlePath), { checkCRC32: true }) : null;
 const enableV8 = process.env.NC_TEST_V8 === '1';
 const v7Ref = '6295c66c57e474546c5c8986ac937bca921f3807';
 const baselineFiles = new Map();
@@ -28,9 +35,15 @@ let release = 1;
 let fixtureUpgrade = false;
 let missingAsset = false;
 let missingRequests = 0;
+let remoteProbes = 0;
 
 const server = createServer(async (req, res) => {
   const path = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+  if (finalization && path === '/v3-probe') {
+    remoteProbes++;
+    res.writeHead(204).end();
+    return;
+  }
   if (migration && path === '/test-fixture') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end('<title>IndexedDB de test</title>');
     return;
@@ -42,8 +55,10 @@ const server = createServer(async (req, res) => {
   try {
     let body;
     const legacyOrigin = migration && req.headers.host?.startsWith('localhost:');
-    const ref = baseline || (migration && (release === 1 || legacyOrigin) && v7Ref);
-    if (ref) {
+    const ref = baseline || ((migration || finalization) && (release === 1 || legacyOrigin) && v7Ref);
+    if (bundle) {
+      body = await bundle.file(file.slice(resolve(root).length + 1).split(sep).join('/')).async('nodebuffer');
+    } else if (ref) {
       const relative = file.slice(resolve(root).length + 1).split(sep).join('/');
       if (!baselineFiles.has(relative)) baselineFiles.set(relative, execFileSync(
         'git', ['show', `${ref}:${relative}`], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 8 << 20 }));
@@ -741,6 +756,7 @@ try {
   await cdp.send('Page.navigate', { url });
   await until(() => cdp.run("typeof NC_DEBUG !== 'undefined' && Boolean(navigator.serviceWorker.controller)"));
   console.log('OK — lancement de la liseuse sous /liseuse/ et activation du service worker.');
+  console.log((await cdp.send('Browser.getVersion')).product);
 
   if (process.env.NC_BENCHMARK) {
     await benchmark(cdp);
@@ -756,6 +772,10 @@ try {
     await testStats({ cdp, port, url, openTab, until, makeBooks });
   } else if (process.argv.includes('--stats-benchmark')) {
     await benchmarkStats({ cdp, until });
+  } else if (finalization) {
+    await testV3({ cdp, port, url, openTab, until, makeBooks, activate: () => { release = 2; }, remoteProbes: () => remoteProbes });
+  } else if (bundle) {
+    await testV3Package({ cdp, url, until, makeBooks, entries: Object.keys(bundle.files) });
   } else {
 
   assert.equal((await cdp.run(`(${rawCatalog})()`)).version, enableV8 ? 8 : 7);

@@ -146,14 +146,8 @@ NC.library = (() => {
   async function peepEpub(buf) {
     let title = '', author = '', cover = null;
     const book = ePub();
-    let deadline;
     try {
-      await Promise.race([
-        Promise.all([book.open(buf), book.ready, book.opened]),
-        new Promise((_, reject) => {
-          deadline = setTimeout(() => reject(new Error('délai dépassé')), 15000);
-        }),
-      ]);
+      await NC.prepareEpub(book, buf);
       const meta = await book.loaded.metadata;
       if (meta && meta.title) title = meta.title;
       if (meta && meta.creator) author = meta.creator;
@@ -165,7 +159,6 @@ NC.library = (() => {
         }
       } catch (e) { /* pas de couverture */ }
     } finally {
-      clearTimeout(deadline);
       try { book.destroy(); } catch (e) {}
     }
     return { title, author, cover };

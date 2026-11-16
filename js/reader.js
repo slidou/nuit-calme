@@ -8,6 +8,8 @@
 NC.reader = (() => {
   let ctl = null;        // contrôleur epub ou pdf courant
   let current = null;    // enregistrement du livre
+  let readerEpoch;
+  let closing = false;
   let notebookVisit = null;
   let finishFlip = null;
   let bookTheme = 'paper'; // thème du CONTENU du livre (papier | nuit) — indépendant du site
@@ -62,10 +64,11 @@ NC.reader = (() => {
   }
 
   async function openInner(bookId, gen, consultation) {
-    const rec = await NC.db.getBook(bookId);
+    const { book: rec, epoch } = await NC.db.getBookForReading(bookId);
     if (!rec) { NC.toast('Livre introuvable.', 'error'); return; }
     if (gen !== openGen) return; // cette ouverture a été dépassée entre-temps
     current = rec;
+    readerEpoch = epoch;
     notebookVisit = consultation;
     const preview = !!consultation;
     /* Filtres du tiroir Soulignages & notes : réinitialisés à CHAQUE
@@ -137,7 +140,7 @@ NC.reader = (() => {
       if (prefsRec && prefsRec.fontSize) {
         epubFont = prefsRec.fontSize;
       } else if (!prefsRec?.reading && !preview && epubFont !== 100) {
-        NC.db.patchPrefs(rec.id, { fontSize: epubFont }).catch(() => {});
+        NC.db.patchPrefs(rec.id, { fontSize: epubFont }, epoch).catch(() => {});
       }
     }
 
@@ -176,8 +179,8 @@ NC.reader = (() => {
     let newCtl;
     try {
       newCtl = rec.type === 'epub'
-        ? await NC.openEpub(rec, { ...effective, spread, lastCfi, legacyFontSize: epubFont, preview })
-        : await NC.openPdf(rec, { spread, lastPage: pdfLastPage, zoom: pdfZoom, fit: pdfFit, theme: bookTheme, preview });
+        ? await NC.openEpub(rec, { ...effective, spread, lastCfi, legacyFontSize: epubFont, preview, epoch })
+        : await NC.openPdf(rec, { spread, lastPage: pdfLastPage, zoom: pdfZoom, fit: pdfFit, theme: bookTheme, preview, epoch });
     } catch (err) {
       console.error(err);
       NC.toast(/password/i.test(String(err)) ? 'Ce PDF est protégé par un mot de passe.' : 'Ce livre n\'a pas pu être ouvert.', 'error');
@@ -215,7 +218,7 @@ NC.reader = (() => {
       await initReadStatus(rec.id);
       if (gen !== openGen) return;
       trackPosition();
-      readingTracker.start(rec.id);
+      readingTracker.start(rec.id, epoch);
       statsNotePosition(null, false);
     }
     updateSpreadBtn();
@@ -317,7 +320,7 @@ NC.reader = (() => {
   async function initReadStatus(bookId) {
     try {
       const generation = openGen;
-      const row = await NC.db.changeBookMeta(bookId, { status: 'encours' }, { keepFinished: true, opened: true });
+      const row = await NC.db.changeBookMeta(bookId, { status: 'encours' }, { keepFinished: true, opened: true, epoch: readerEpoch });
       if (generation === openGen && row) statusNow = NC.normStatus(row.status);
     } catch (e) { console.error('statut de lecture', e); }
   }
@@ -337,7 +340,7 @@ NC.reader = (() => {
     const bookId = current.id;
     const title = current.title;
     const generation = openGen;
-    NC.db.changeBookMeta(bookId, { status: 'termine' }, { finishSource: ctl.type })
+    NC.db.changeBookMeta(bookId, { status: 'termine' }, { finishSource: ctl.type, epoch: readerEpoch })
       .then((row) => {
         if (row && generation === openGen) NC.toast(`« ${title} » est terminé — marqué comme tel dans la bibliothèque.`, 'success', 3200);
       })
@@ -771,7 +774,7 @@ NC.reader = (() => {
     const bm = { id: crypto.randomUUID(), bookId: current.id, createdAt: Date.now(), ...snap };
     bookmarkWriting = true;
     try {
-      const saved = await NC.db.putBookmark(bm);
+      const saved = await NC.db.putBookmark(bm, readerEpoch);
       if (ctl !== reader) return;
       if (!bookmarkCache.some((row) => row.id === saved.id)) bookmarkCache.push(saved);
       NC.toast('Signet posé — ' + (bm.label || 'ici') + '. Retrouvez-le dans le sommaire.', 'success', 2400);
@@ -786,7 +789,7 @@ NC.reader = (() => {
 
   async function removeBookmark(bm) {
     const reader = ctl;
-    try { await NC.db.deleteBookmark(bm.id, bm.bookId); }
+    try { await NC.db.deleteBookmark(bm.id, bm.bookId, bm, readerEpoch); }
     catch (error) { NC.toast('Le signet n’a pas pu être retiré.', 'error'); return; }
     if (ctl !== reader) return;
     bookmarkCache = bookmarkCache.filter((b) => b.id !== bm.id);
@@ -873,7 +876,7 @@ NC.reader = (() => {
       at: visit.at,
       dwell,
     }, visit.snap);
-    NC.db.addHistory(entry, 150);
+    NC.db.addHistory(entry, 150, readerEpoch);
   }
 
   function trackPosition() {
@@ -956,7 +959,7 @@ NC.reader = (() => {
           }, 2800);
           return;
         }
-        try { await NC.db.clearHistoryFor(current.id); } catch (e) { console.error(e); }
+        try { await NC.db.clearHistoryFor(current.id, readerEpoch); } catch (e) { console.error(e); }
         renderHistory($('#drawer-body'));
       });
       head.appendChild(clear);
@@ -1684,7 +1687,7 @@ NC.reader = (() => {
         const result = change(prefs);
         legacyChange = result.legacy;
         return result.fields;
-      });
+      }, readerEpoch);
       if (!row) throw new Error('Ce livre a été retiré de la bibliothèque.');
     } catch (error) {
       NC.toast(error.name === 'InvalidStateError' ? error.message : 'Impossible d’enregistrer les réglages de ce livre.', 'error');
@@ -2078,21 +2081,29 @@ NC.reader = (() => {
   const toggleFocus = () => applyFocus(!focusMode);
 
   /* ── Fermeture ── */
-  async function close(silent) {
+  async function close(silent, discard = false) {
+    if (closing) return;
+    closing = true;
+    try { await closeReader(silent, discard); } finally { closing = false; }
+  }
+
+  async function closeReader(silent, discard) {
     finishFlip?.();
     const bookId = current?.id;
     const returnToNotebook = notebookVisit;
     openGen++; // toute ouverture encore en vol devient périmée
-    endVisit(); // clôture le passage en cours (s'il a assez vécu) — n°9
+    if (discard) visit = null;
+    else endVisit();
     await readingTracker.stop();
     if (ctl) {
       await readingQueue;
       await ctl.layoutSettled?.();
-      try { await ctl.saveProgress(); } catch (e) {}
+      if (!discard) { try { await ctl.saveProgress(); } catch (e) {} }
       try { ctl.destroy(); } catch (e) {}
       ctl = null;
     }
     current = null;
+    readerEpoch = undefined;
     notebookVisit = null;
     bookmarkCache = [];
     closeCatPop();   // popover de catégorie ouvert depuis le tiroir (V2.26)
@@ -2414,7 +2425,9 @@ NC.reader = (() => {
       }, { capture: true, passive: true });
     }
     NC.db.onNotebookChange((change) => {
-      if (change.replace || (change.deleted && change.deleted === current?.id)) readingTracker.stop();
+      if (!current || closing || (!change.replace && change.deleted !== current.id)) return;
+      NC.toast(change.replace ? 'Bibliothèque restaurée. Rouvrez le livre pour reprendre la lecture.' : 'Ce livre a été retiré de la bibliothèque.', 'info');
+      close(false, true).catch((error) => console.error('Fermeture du lecteur', error));
     });
     /* Gestes tactiles (V2.17) : balayages, zones de tap et pinch sur
        la zone de lecture. Le câblage des iframes EPUB se fait de leur

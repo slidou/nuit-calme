@@ -155,8 +155,15 @@ NC.db = (() => {
     }));
   }
 
-  function update(name, id, change, bookId) {
+  function ifCurrentEpoch(transaction, epoch, run) {
+    if (epoch === undefined) { run(); return; }
+    const request = transaction.objectStore('settings').get(NC.readingStats.epochKey);
+    request.onsuccess = () => { if ((request.result?.value ?? null) === epoch) run(); };
+  }
+
+  function update(name, id, change, bookId, epoch) {
     const stores = bookId === undefined ? [name] : ['books', name];
+    if (epoch !== undefined) stores.push('settings');
     return open().then((db) => new Promise((resolve, reject) => {
       const t = db.transaction(stores, 'readwrite');
       const store = t.objectStore(name);
@@ -176,18 +183,19 @@ NC.db = (() => {
           }
         };
       }
-      if (bookId === undefined) read();
-      else {
+      function readIfPresent() {
+        if (bookId === undefined) { read(); return; }
         const exists = t.objectStore('books').getKey(bookId);
         exists.onsuccess = () => { if (exists.result !== undefined) read(); };
       }
+      ifCurrentEpoch(t, epoch, readIfPresent);
     }));
   }
 
-  function saveForBook(name, rows, bookId, matchesExisting) {
+  function saveForBook(name, rows, bookId, matchesExisting, epoch) {
     return open().then((db) => new Promise((resolve, reject) => {
-      const t = db.transaction(['books', name], 'readwrite');
-      const exists = t.objectStore('books').getKey(bookId);
+      const stores = epoch === undefined ? ['books', name] : ['books', name, 'settings'];
+      const t = db.transaction(stores, 'readwrite');
       let failure;
       let saved;
       t.oncomplete = () => resolve(saved);
@@ -201,19 +209,22 @@ NC.db = (() => {
         }
       }
       const store = t.objectStore(name);
-      exists.onsuccess = () => write(() => {
-        if (exists.result === undefined) throw new Error('Livre introuvable');
-        if (!matchesExisting) {
-          for (const row of rows) store.put(row);
-          return;
-        }
-        const request = store.index('bookId').getAll(bookId);
-        request.onsuccess = () => write(() => {
-          saved = request.result.find(matchesExisting);
-          if (!saved) {
-            saved = rows[0];
-            store.put(saved);
+      ifCurrentEpoch(t, epoch, () => {
+        const exists = t.objectStore('books').getKey(bookId);
+        exists.onsuccess = () => write(() => {
+          if (exists.result === undefined) throw new Error('Livre introuvable');
+          if (!matchesExisting) {
+            for (const row of rows) store.put(row);
+            return;
           }
+          const request = store.index('bookId').getAll(bookId);
+          request.onsuccess = () => write(() => {
+            saved = request.result.find(matchesExisting);
+            if (!saved) {
+              saved = rows[0];
+              store.put(saved);
+            }
+          });
         });
       });
     }));
@@ -240,7 +251,7 @@ NC.db = (() => {
     ({ id, title, author, type, cover, size, addedAt, lastOpened });
   const notebookBook = ({ id, title, author, type }) => ({ id, title, author, type });
 
-  function removeNotebookRow(store, expected) {
+  function removeNotebookRow(store, expected, epoch) {
     return notifyReader(update(store, expected.id, (row, records) => {
       if (!row) return;
       if (JSON.stringify(row) !== JSON.stringify(expected)) {
@@ -248,7 +259,7 @@ NC.db = (() => {
       }
       records.delete(expected.id);
       return row;
-    }), expected.bookId);
+    }, expected.bookId, epoch), expected.bookId);
   }
 
   function putBookRow(transaction, book) {
@@ -497,6 +508,13 @@ NC.db = (() => {
     countBooks: () => reqToPromise('books', 'readonly', (s) => s.count()),
     allBooks: () => reqToPromise('books', 'readonly', (s) => s.getAll()),
     getBook: (id) => reqToPromise('books', 'readonly', (s) => s.get(id)),
+    getBookForReading: (id) => open().then((db) => new Promise((resolve, reject) => {
+      const t = db.transaction(['books', 'settings']);
+      const book = t.objectStore('books').get(id);
+      const generation = t.objectStore('settings').get(NC.readingStats.epochKey);
+      t.oncomplete = () => resolve({ book: book.result, epoch: generation.result?.value ?? null });
+      t.onabort = () => reject(t.error);
+    })),
     putBook: (book) => notifyCatalog(writeBooks((t) => putBookRow(t, book)),
       () => ({ books: [notebookBook(book)] })),
     putImportedBook: (book) => notifyCatalog(writeBooks((t, apply) => {
@@ -568,16 +586,16 @@ NC.db = (() => {
       .then((all) => (Array.isArray(all) ? all : [])
         .filter((a) => a.bookId === bookId)
         .sort((a, b) => a.createdAt - b.createdAt)),
-    putAnnotation: (a) => notifyReader(saveForBook('annotations', [a], a.bookId), a.bookId),
-    putAnnotations: (bookId, rows) => notifyReader(saveForBook('annotations', rows, bookId), bookId),
-    patchAnnotation: (id, fields, bookId, expectation) => notifyReader(update('annotations', id, (row) => {
+    putAnnotation: (a, epoch) => notifyReader(saveForBook('annotations', [a], a.bookId, undefined, epoch), a.bookId),
+    putAnnotations: (bookId, rows, epoch) => notifyReader(saveForBook('annotations', rows, bookId, undefined, epoch), bookId),
+    patchAnnotation: (id, fields, bookId, expectation, epoch) => notifyReader(update('annotations', id, (row) => {
       if (!row || (bookId !== undefined && row.bookId !== bookId)) return;
       if (expectation && row.note !== expectation.note) {
         throw new DOMException('Cette note a été modifiée depuis son ouverture.', 'InvalidStateError');
       }
       return { ...row, ...fields };
-    }), bookId),
-    deleteAnnotation: (id, bookId, expected) => expected ? removeNotebookRow('annotations', expected)
+    }, bookId, epoch), bookId),
+    deleteAnnotation: (id, bookId, expected, epoch) => expected ? removeNotebookRow('annotations', expected, epoch)
       : notifyReader(tx('annotations', 'readwrite', (s) => s.delete(id)), bookId),
     /* Lectures complètes pour la sauvegarde (V2.25) : l'export et la
        restauration parcourent chaque magasin sans se soucier du livre. */
@@ -602,30 +620,30 @@ NC.db = (() => {
     getPrefs: (bookId) => reqToPromise('prefs', 'readonly', (s) => s.get(bookId)),
     allPrefs: () => reqToPromise('prefs', 'readonly', (s) => s.getAll()),
     putPrefs: (p) => tx('prefs', 'readwrite', (s) => s.put(p)),
-    updateReadingPrefs: (id, change) => update('prefs', id, (row) => ({
+    updateReadingPrefs: (id, change, epoch) => update('prefs', id, (row) => ({
       ...row, ...change(row || {}), id, updatedAt: Date.now(),
-    }), id),
-    patchPrefs: (id, fields) => update('prefs', id, (row) => {
+    }), id, epoch),
+    patchPrefs: (id, fields, epoch) => update('prefs', id, (row) => {
       const next = { ...row, ...fields, id, updatedAt: Date.now() };
       if (fields.typo) next.typo = { ...row?.typo, ...fields.typo };
       return next;
-    }, id),
+    }, id, epoch),
 
     /* ── Progression de lecture (un petit enregistrement par livre) ── */
     getProgress: (id) => reqToPromise('progress', 'readonly', (s) => s.get(id)),
     allProgress: () => reqToPromise('progress', 'readonly', (s) => s.getAll()),
-    putProgress: (p) => update('progress', p.id, (row) =>
-      row && (row.lastOpened || 0) > p.lastOpened ? row : p, p.id),
+    putProgress: (p, epoch) => update('progress', p.id, (row) =>
+      row && (row.lastOpened || 0) > p.lastOpened ? row : p, p.id, epoch),
 
     /* ── Signets (n°8) : les repères posés par le lecteur, par livre ── */
     bookmarksFor: (bookId) => reqToPromise('bookmarks', 'readonly', (s) =>
         s.indexNames.contains('bookId') ? s.index('bookId').getAll(bookId) : s.getAll())
       .then((all) => (Array.isArray(all) ? all : []).filter((b) => b.bookId === bookId)),
-    putBookmark: (b) => notifyReader(saveForBook('bookmarks', [b], b.bookId, (row) =>
+    putBookmark: (b, epoch) => notifyReader(saveForBook('bookmarks', [b], b.bookId, (row) =>
       b.page ? row.page === b.page :
         typeof b.sectionIndex === 'number' && row.sectionIndex === b.sectionIndex &&
-        (b.pageInSec == null || row.pageInSec == null || row.pageInSec === b.pageInSec)), b.bookId),
-    deleteBookmark: (id, bookId, expected) => expected ? removeNotebookRow('bookmarks', expected)
+        (b.pageInSec == null || row.pageInSec == null || row.pageInSec === b.pageInSec), epoch), b.bookId),
+    deleteBookmark: (id, bookId, expected, epoch) => expected ? removeNotebookRow('bookmarks', expected, epoch)
       : notifyReader(tx('bookmarks', 'readwrite', (s) => s.delete(id)), bookId),
 
     /* ── Historique des passages (n°9) ──
@@ -638,27 +656,25 @@ NC.db = (() => {
       .then((all) => (Array.isArray(all) ? all : [])
         .filter((h) => h.bookId === bookId)
         .sort((a, b) => b.at - a.at)),
-    addHistory: (entry, cap) => saveForBook('history', [entry], entry.bookId)
-      .then(() => reqToPromise('history', 'readonly', (s) =>
-          s.indexNames.contains('bookId') ? s.index('bookId').getAll(entry.bookId) : s.getAll()))
-      .then((all) => {
-        const rows = (Array.isArray(all) ? all : []).filter((h) => h.bookId === entry.bookId)
-          .sort((a, b) => a.at - b.at); // du plus ancien au plus récent
-        const extra = Math.max(0, rows.length - (cap || 150));
-        if (!extra) return;
-        return tx('history', 'readwrite', (s) => {
+    addHistory: (entry, cap, epoch) => update('history', entry.id, (_, s) => {
+        s.put(entry);
+        const request = s.index('bookId').getAll(entry.bookId);
+        request.onsuccess = () => {
+          const rows = request.result.sort((a, b) => a.at - b.at);
+          const extra = Math.max(0, rows.length - (cap || 150));
           for (let i = 0; i < extra; i++) s.delete(rows[i].id);
-        });
-      })
+        };
+      }, entry.bookId, epoch)
       .catch((e) => console.error('historique', e)),
-    clearHistoryFor: (bookId) => open().then((db) => new Promise((resolve, reject) => {
-      const t = db.transaction('history', 'readwrite');
-      const cur = t.objectStore('history').index('bookId')
-        .openCursor(IDBKeyRange.only(bookId));
-      cur.onsuccess = () => {
-        const c = cur.result;
-        if (c) { c.delete(); c.continue(); }
-      };
+    clearHistoryFor: (bookId, epoch) => open().then((db) => new Promise((resolve, reject) => {
+      const t = db.transaction(epoch === undefined ? ['history'] : ['history', 'settings'], 'readwrite');
+      ifCurrentEpoch(t, epoch, () => {
+        const cur = t.objectStore('history').index('bookId').openCursor(IDBKeyRange.only(bookId));
+        cur.onsuccess = () => {
+          const c = cur.result;
+          if (c) { c.delete(); c.continue(); }
+        };
+      });
       t.oncomplete = () => resolve();
       t.onerror = () => reject(t.error);
       t.onabort = () => reject(t.error);
@@ -758,7 +774,7 @@ NC.db = (() => {
     getBookMeta: (id) => reqToPromise('bookmeta', 'readonly', (s) => s.get(id)),
     allBookMeta: () => reqToPromise('bookmeta', 'readonly', (s) => s.getAll()),
     putBookMeta: (m) => tx('bookmeta', 'readwrite', (s) => s.put(m)),
-    changeBookMeta: (id, fields, { keepFinished = false, opened = false, finishSource = 'manual' } = {}) =>
+    changeBookMeta: (id, fields, { keepFinished = false, opened = false, finishSource = 'manual', epoch } = {}) =>
       notifyCatalog(update('bookmeta', id, (row) => {
         const previousStatus = NC.normStatus(row?.status);
         if (keepFinished && previousStatus === 'termine' && (!opened || row.firstOpenedAt)) return row;
@@ -774,7 +790,7 @@ NC.db = (() => {
           next.finishSource = next.status === 'termine' ? finishSource : null;
         }
         return next;
-      }, id)),
+      }, id, epoch)),
 
     allGroups: () => reqToPromise('groups', 'readonly', (s) => s.getAll()),
     putGroup: (g) => notifyCatalog(tx('groups', 'readwrite', (s) => s.put(g))),

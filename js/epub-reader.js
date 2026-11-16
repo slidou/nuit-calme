@@ -26,8 +26,8 @@ const NC_FOCUS_CSS = [
 
 NC.openEpub = async function (rec, opts) {
   const host = NC.$('#epub-host');
-  const book = ePub(rec.data);
-  try { await book.opened; await book.loaded.displayOptions; } catch (error) { book.destroy(); throw error; }
+  const book = ePub();
+  try { await NC.prepareEpub(book, rec.data); } catch (error) { book.destroy(); throw error; }
   const fixedLayout = book.package.metadata.layout === 'pre-paginated' || book.displayOptions?.fixedLayout === 'true';
   const fixedSections = book.spine.spineItems.some((section) => section.properties.includes('rendition:layout-pre-paginated'));
 
@@ -114,6 +114,12 @@ NC.openEpub = async function (rec, opts) {
       minSpreadWidth: 700,
       resizeOnOrientationChange: false,
       ...(!ctl.fixedLayout && pageGap && !scrolled ? { gap: Math.round(size.width * pageGap / (ctl.spread === 'always' && size.width >= 700 ? 2 : 1)) } : {}),
+    });
+    // epub.js signale l'échec de la vue sans rejeter son attente de display.
+    r.on('displayerror', (error) => {
+      const pending = r.displaying;
+      r.displaying = undefined;
+      pending?.reject(error);
     });
     // Thème courant injecté dans chaque contenu rendu (voie fiable epub.js)
     r.hooks.content.register((contents) => {
@@ -540,7 +546,7 @@ NC.openEpub = async function (rec, opts) {
     await displayAt(items[idx].href);
   };
 
-  const writeProgress = NC.progressWriter(rec.id);
+  const writeProgress = NC.progressWriter(rec.id, opts.epoch);
   ctl.saveProgress = () => {
     const loc = ctl.location;
     if (opts.preview || reflowPending || !loc?.start?.cfi) return Promise.resolve();
@@ -901,7 +907,7 @@ NC.openEpub = async function (rec, opts) {
     a.sectionIndex = view.index;
     a.start = off.start;
     a.end = off.end;
-    NC.db.patchAnnotation(a.id, { sectionIndex: a.sectionIndex, start: a.start, end: a.end }, rec.id).catch(() => {});
+    NC.db.patchAnnotation(a.id, { sectionIndex: a.sectionIndex, start: a.start, end: a.end }, rec.id, undefined, opts.epoch).catch(() => {});
     return true;
   }
 
@@ -1009,7 +1015,7 @@ NC.openEpub = async function (rec, opts) {
       color: NC.highlightKey(colorKey),
       createdAt: Date.now(),
     };
-    await NC.db.putAnnotation(ann);
+    await NC.db.putAnnotation(ann, opts.epoch);
     annCache.push(ann);
     NC.db.putSetting('lastHighlightColor', ann.color).catch(() => {});
     redrawSection(ann.sectionIndex);
@@ -1042,7 +1048,7 @@ NC.openEpub = async function (rec, opts) {
       note: String(noteText || '').slice(0, 4000),
       createdAt: Date.now(),
     };
-    await NC.db.putAnnotation(ann);
+    await NC.db.putAnnotation(ann, opts.epoch);
     annCache.push(ann);
     redrawSection(ann.sectionIndex);
     return ann;
@@ -1053,7 +1059,7 @@ NC.openEpub = async function (rec, opts) {
   ctl.updateNote = async (ann, noteText) => {
     const val = String(noteText || '').slice(0, 4000);
     const target = annCache.find((a) => a.id === ann.id);
-    const row = await NC.db.patchAnnotation(ann.id, { note: val, updatedAt: Date.now() }, rec.id, { note: ann.note });
+    const row = await NC.db.patchAnnotation(ann.id, { note: val, updatedAt: Date.now() }, rec.id, { note: ann.note }, opts.epoch);
     if (!row) throw new Error('Annotation supprimée');
     if (target) Object.assign(target, row);
     return true;
@@ -1065,7 +1071,7 @@ NC.openEpub = async function (rec, opts) {
   ctl.recolorHighlight = async (ann, colorKey) => {
     const key = NC.highlightKey(colorKey);
     const target = annCache.find((a) => a.id === ann.id);
-    const row = await NC.db.patchAnnotation(ann.id, { color: key }, rec.id);
+    const row = await NC.db.patchAnnotation(ann.id, { color: key }, rec.id, undefined, opts.epoch);
     if (!row) throw new Error('Annotation supprimée');
     if (target) Object.assign(target, row);
     const hex = NC.highlightHex(key);
@@ -1087,14 +1093,14 @@ NC.openEpub = async function (rec, opts) {
   ctl.setAnnotationCategory = async (ann, key) => {
     const val = NC.categoryMeta(key) ? key : '';
     const target = annCache.find((a) => a.id === ann.id);
-    const row = await NC.db.patchAnnotation(ann.id, { category: val }, rec.id);
+    const row = await NC.db.patchAnnotation(ann.id, { category: val }, rec.id, undefined, opts.epoch);
     if (!row) throw new Error('Annotation supprimée');
     if (target) Object.assign(target, row);
     return val;
   };
 
   ctl.removeHighlight = async (ann) => {
-    const removed = await NC.db.deleteAnnotation(ann.id, rec.id, ann);
+    const removed = await NC.db.deleteAnnotation(ann.id, rec.id, ann, opts.epoch);
     if (!removed) return;
     annCache = annCache.filter((a) => a.id !== ann.id);
     const views = [];

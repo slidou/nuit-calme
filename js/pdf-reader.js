@@ -43,7 +43,7 @@ NC.openPdf = async function (rec, opts) {
 
   const isDouble = () => ctl.spread === 'always';
   const pageStep = () => (isDouble() ? 2 : 1);
-  const writeProgress = NC.progressWriter(rec.id);
+  const writeProgress = NC.progressWriter(rec.id, opts.epoch);
 
   /* ── Couche texte (n°4) ──
      Un calque de spans transparents est superposé à chaque canvas : la
@@ -589,7 +589,7 @@ NC.openPdf = async function (rec, opts) {
       rects: part.rects,
       createdAt: Date.now(),
     }));
-    await NC.db.putAnnotations(rec.id, created);
+    await NC.db.putAnnotations(rec.id, created, opts.epoch);
     annCache.push(...created);
     NC.db.putSetting('lastHighlightColor', color).catch(() => {});
     stage.querySelectorAll('.nc-pdf-page').forEach((wrap) => {
@@ -606,7 +606,7 @@ NC.openPdf = async function (rec, opts) {
   };
 
   ctl.removeHighlight = async (ann) => {
-    const removed = await NC.db.deleteAnnotation(ann.id, rec.id, ann);
+    const removed = await NC.db.deleteAnnotation(ann.id, rec.id, ann, opts.epoch);
     if (!removed) return;
     const i = annCache.findIndex((a) => a.id === ann.id);
     if (i >= 0) annCache.splice(i, 1);
@@ -623,7 +623,7 @@ NC.openPdf = async function (rec, opts) {
   ctl.recolorHighlight = async (ann, colorKey) => {
     const key = NC.highlightKey(colorKey);
     const target = annCache.find((a) => a.id === ann.id);
-    const row = await NC.db.patchAnnotation(ann.id, { color: key }, rec.id);
+    const row = await NC.db.patchAnnotation(ann.id, { color: key }, rec.id, undefined, opts.epoch);
     if (!row) throw new Error('Annotation supprimée');
     if (target) Object.assign(target, row);
     const hex = NC.highlightHex(key);
@@ -641,7 +641,7 @@ NC.openPdf = async function (rec, opts) {
   ctl.setAnnotationCategory = async (ann, key) => {
     const val = NC.categoryMeta(key) ? key : '';
     const target = annCache.find((a) => a.id === ann.id);
-    const row = await NC.db.patchAnnotation(ann.id, { category: val }, rec.id);
+    const row = await NC.db.patchAnnotation(ann.id, { category: val }, rec.id, undefined, opts.epoch);
     if (!row) throw new Error('Annotation supprimée');
     if (target) Object.assign(target, row);
     return val;

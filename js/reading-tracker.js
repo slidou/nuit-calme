@@ -156,11 +156,14 @@ NC.readingTracker = (() => {
       else if (wantLock && Date.now() - requestedAt <= 1800) queuedPages += pages;
     }
 
-    function start(bookId) {
+    function start(bookId, readerEpoch) {
       const next = { bookId, epoch: undefined };
       context = next;
       pageKey = '';
-      next.ready = navigator.locks ? NC.db.prepareReadingStats(NC.todayKey()).then((epoch) => { next.epoch = epoch; }) : Promise.resolve();
+      next.ready = navigator.locks ? NC.db.prepareReadingStats(NC.todayKey()).then((epoch) => {
+        if (readerEpoch !== undefined && readerEpoch !== epoch) { if (context === next) stop(); return; }
+        next.epoch = epoch;
+      }) : Promise.resolve();
       next.ready.catch(() => {});
       if (!timer) timer = setInterval(tick, tickMs);
     }

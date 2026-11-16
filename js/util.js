@@ -447,12 +447,21 @@ NC.archive = (() => {
   return { load, read, validateBook, download, maxBook, maxArchive };
 })();
 
-NC.progressWriter = function (id) {
+NC.prepareEpub = async function (book, data) {
+  let deadline;
+  try {
+    await Promise.race([Promise.all([book.open(data), book.ready, book.opened]), new Promise((resolve, reject) => {
+      deadline = setTimeout(() => reject(new Error('Délai d’ouverture EPUB dépassé')), 15000);
+    })]);
+  } finally { clearTimeout(deadline); }
+};
+
+NC.progressWriter = function (id, epoch) {
   let last;
   return (position) => {
     const key = JSON.stringify(position);
     if (last?.key === key) return last.pending;
-    const pending = NC.db.putProgress({ id, ...position, lastOpened: Date.now() }).catch((error) => {
+    const pending = NC.db.putProgress({ id, ...position, lastOpened: Date.now() }, epoch).catch((error) => {
       if (last?.pending === pending) {
         last = null;
         NC.toast('La position de lecture n’a pas pu être enregistrée.', 'error');
