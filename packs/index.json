@@ -1,5 +1,5 @@
 {
-  "genere": "2026-11-15 23:36 UTC",
+  "genere": "2026-11-18 00:38 UTC",
   "packs": [
     {
       "id": "75 Japanese Novels",
@@ -299,6 +299,67 @@
       ]
     },
     {
+      "id": "Mahmoud Darwish",
+      "titre": "Mahmoud Darwish",
+      "description": "",
+      "type": "dossier",
+      "source": "packs/Mahmoud Darwish/",
+      "livres": [
+        {
+          "fichier": "a river dies of thirst, mahmoud darwish.pdf",
+          "taille": 742360
+        },
+        {
+          "fichier": "almond blossoms and beyond, mahmoud darwish.pdf",
+          "taille": 614381
+        },
+        {
+          "fichier": "if i were another, mahmoud darwish.pdf",
+          "taille": 1064435
+        },
+        {
+          "fichier": "in the presence of absence, mahmoud darwish.pdf",
+          "taille": 1006433
+        },
+        {
+          "fichier": "journal of an ordinary grief, mahmoud darwish_.pdf",
+          "taille": 986350
+        },
+        {
+          "fichier": "memory for forgetfulness, mahmoud darwish.pdf",
+          "taille": 6603914
+        },
+        {
+          "fichier": "mural, mahmoud darwish_.pdf",
+          "taille": 1753394
+        },
+        {
+          "fichier": "psalms, mahmoud darwish_.pdf",
+          "taille": 2216921
+        },
+        {
+          "fichier": "state of siege, mahmoud darwish_.pdf",
+          "taille": 2457740
+        },
+        {
+          "fichier": "the butterfly_s burden, mahmoud darwish.pdf",
+          "taille": 8655583
+        },
+        {
+          "fichier": "unfortunately it was paradise, mahmoud darwish_.pdf",
+          "taille": 1434653
+        },
+        {
+          "fichier": "victims of a map, mahmoud darwish.pdf",
+          "taille": 1412898
+        },
+        {
+          "fichier": "why did you leave the horse alone, mahmoud darwish_.pdf",
+          "taille": 3676850
+        }
+      ]
+    },
+    {
       "id": "Miscellaneous Fiction",
       "titre": "Miscellaneous Fiction",
       "description": "",
@@ -592,6 +653,741 @@
         {
           "fichier": "The Unknown Masterpiece (Honoré de Balzac) (Z-Library).epub",
           "taille": 815446
+        }
+      ]
+    },
+    {
+      "id": "Palestinian Poets-Authors",
+      "titre": "Palestinian Poets Authors",
+      "description": "",
+      "type": "dossier",
+      "source": "packs/Palestinian Poets-Authors/",
+      "livres": [
+        {
+          "fichier": "a mountainous journey - a poet_s autobiography, fadwa tuqan.pdf",
+          "taille": 13235236
+        },
+        {
+          "fichier": "all faces but mine_ the poetry of samih al-qasim.pdf",
+          "taille": 7544211
+        },
+        {
+          "fichier": "an oral history of the palestinian nakba_ decolonising, nahla abdo.epub",
+          "taille": 2256960
+        },
+        {
+          "fichier": "balcony on the moon_ a palestinian coming of age memoir, ibtisam barakat_.pdf",
+          "taille": 7388240
+        },
+        {
+          "fichier": "cry in a long night and four other stories, jabra ibrahim jabra.epub",
+          "taille": 1506821
+        },
+        {
+          "fichier": "describing the past (the arab list), ghassan zaqtan.pdf",
+          "taille": 344411
+        },
+        {
+          "fichier": "enter ghost, isabella hammad_.epub",
+          "taille": 2174905
+        },
+        {
+          "fichier": "exhausted on the cross, najwān darwīsh.epub",
+          "taille": 240039
+        },
+        {
+          "fichier": "hunters in a narrow street - a novel, jabra ibrahim jabra_.pdf",
+          "taille": 4342036
+        },
+        {
+          "fichier": "i saw ramallah, mourid barghouti.pdf",
+          "taille": 1755950
+        },
+        {
+          "fichier": "i was born there i was born here, mourid barghouti.epub",
+          "taille": 644392
+        },
+        {
+          "fichier": "if i must die_ poetry and prose, refaat alareer.pdf",
+          "taille": 4983010
+        },
+        {
+          "fichier": "in jerusalem and other poems - written between 1996-2016, tamim al-barghouti_.pdf",
+          "taille": 2311267
+        },
+        {
+          "fichier": "in search of walid masoud - a novel, jabra ibrahim jabra.pdf",
+          "taille": 2771199
+        },
+        {
+          "fichier": "like a straw bird it follows me and other poems, ghassan zaqtan.pdf",
+          "taille": 171174
+        },
+        {
+          "fichier": "men in the sun and other palestinian stories, ghassan kanafani_.pdf",
+          "taille": 3056976
+        },
+        {
+          "fichier": "minor detail, adania shibli.epub",
+          "taille": 537526
+        },
+        {
+          "fichier": "my threatening poem - the memoir of a poet in occupation, dareen tatour.pdf",
+          "taille": 9638787
+        },
+        {
+          "fichier": "no one will know you tomorrow_ selected poems 2014-2024, najwan darwish_.pdf",
+          "taille": 8222205
+        },
+        {
+          "fichier": "on zionist literature, ghassan kanafani.epub",
+          "taille": 839100
+        },
+        {
+          "fichier": "perfect victims_ and the politics of appeal, mohammed el-kurd_.epub",
+          "taille": 2709098
+        },
+        {
+          "fichier": "princesses_ street - baghdad memories, jabra ibrahim jabra.pdf",
+          "taille": 1524459
+        },
+        {
+          "fichier": "salt houses, hala alyan.pdf",
+          "taille": 15032271
+        },
+        {
+          "fichier": "tasting the sky_ a palestinian childhood, ibtisam barakat.epub",
+          "taille": 293019
+        },
+        {
+          "fichier": "the eyes of gaza, plestia alaqad_.epub",
+          "taille": 1558667
+        },
+        {
+          "fichier": "the inheritance, sahar khalifeh.epub",
+          "taille": 622803
+        },
+        {
+          "fichier": "the secret life of saeed - the pessoptimist, emile habibi.pdf",
+          "taille": 3079894
+        },
+        {
+          "fichier": "the ship, jabra ibrahim jabra_.pdf",
+          "taille": 10989395
+        },
+        {
+          "fichier": "the silence that remains_ selected poems 1982-2003, ghassan zaqtan.pdf",
+          "taille": 4721169
+        },
+        {
+          "fichier": "the thorn and the carnation (complete works), yahya sinwar.epub",
+          "taille": 855430
+        },
+        {
+          "fichier": "velvet, huzama habayeb.epub",
+          "taille": 760842
+        },
+        {
+          "fichier": "wild thorns, sahar khalifeh.pdf",
+          "taille": 9142831
+        }
+      ]
+    },
+    {
+      "id": "Penguin little black classics",
+      "titre": "Penguin Little Black Classics",
+      "description": "",
+      "type": "dossier",
+      "source": "packs/Penguin little black classics/",
+      "livres": [
+        {
+          "fichier": "001. Mrs Rosie and the Priest (Boccaccio,... (z-lib.org).epub",
+          "taille": 354357
+        },
+        {
+          "fichier": "003. The Saga of Gunnlaug Serpent-tongue (... (Z-Library).epub",
+          "taille": 323534
+        },
+        {
+          "fichier": "004. On Murder Considered as one of the Fi... (Z-Library).epub",
+          "taille": 269668
+        },
+        {
+          "fichier": "005. Aphorisms on Love and Hate ( etc.) (Z-Library).epub",
+          "taille": 352947
+        },
+        {
+          "fichier": "008. A Modest Proposal (Swift, Jonathan) (Z-Library).epub",
+          "taille": 456313
+        },
+        {
+          "fichier": "009. Three Tang Dynasty Poets (Wang Wei) (Z-Library).epub",
+          "taille": 271223
+        },
+        {
+          "fichier": "010. On the Beach at Night Alone (Whitman... (Z-Library).epub",
+          "taille": 270612
+        },
+        {
+          "fichier": "011. A Cup of Sake Beneath the Cherry Trees (Kenko Yoshida) (Z-Library).epub",
+          "taille": 436339
+        },
+        {
+          "fichier": "012. How To Use Your Enemies (Baltasar Gracián) (Z-Library).epub",
+          "taille": 213453
+        },
+        {
+          "fichier": "013. THE EVE OF ST. AGNES (John Keats) (Z-Library).epub",
+          "taille": 624133
+        },
+        {
+          "fichier": "015. Femme Fa... (Z-Library).epub",
+          "taille": 392931
+        },
+        {
+          "fichier": "019. Olalla (Stevenson Robert Louis) (Z-Library).epub",
+          "taille": 46862
+        },
+        {
+          "fichier": "020. The Communist Manifesto (Marx, Karl  Engels, Friedrich) (Z-Library).epub",
+          "taille": 54594
+        },
+        {
+          "fichier": "024. The Gate of the Hundred Sorrows (Rudyard Kipling) (Z-Library).epub",
+          "taille": 60880
+        },
+        {
+          "fichier": "025. Circles of Hell (Alighieri Dante) (Z-Library).epub",
+          "taille": 302119
+        },
+        {
+          "fichier": "028. The Wife Of Baths Tale (Geoffrey Chaucer) (Z-Library).epub",
+          "taille": 288499
+        },
+        {
+          "fichier": "029. How We Weep and Laugh at the Same Thing (Michel de Montaigne [Montaigne, Michel de]) (Z-Library).epub",
+          "taille": 345188
+        },
+        {
+          "fichier": "031. The Tell-Tale Heart (Edgar Allan Poe) (Z-Library).epub",
+          "taille": 58618
+        },
+        {
+          "fichier": "039. The Old Nurse’s Story and Other Tales (Gaskell Elizabeth) (Z-Library).epub",
+          "taille": 339317
+        },
+        {
+          "fichier": "040. The Steel Flea (Nikolai Leskov) (Z-Library).epub",
+          "taille": 360735
+        },
+        {
+          "fichier": "041. The Atheists Mass (Honore de Balzac) (Z-Library).epub",
+          "taille": 26899
+        },
+        {
+          "fichier": "042. The Yellow Wall-Paper (Charlotte Perkins Gilman) (Z-Library).epub",
+          "taille": 428602
+        },
+        {
+          "fichier": "044. A Gentle Spirit A Fantastic Story (Fyodor Dostoevsky) (Z-Library).epub",
+          "taille": 114626
+        },
+        {
+          "fichier": "045. A Simple Heart (Gustave Flaubert) (Z-Library).epub",
+          "taille": 99278
+        },
+        {
+          "fichier": "046. The Nose (Gogol Nikolai) (Z-Library).epub",
+          "taille": 340813
+        },
+        {
+          "fichier": "048. The Reckoning (Edith Wharton) (Z-Library).epub",
+          "taille": 87993
+        },
+        {
+          "fichier": "049. The Figure in the Carpet and Other Stories (Henry James) (Z-Library).epub",
+          "taille": 1944771
+        },
+        {
+          "fichier": "050. Anthem for Doomed Youth (Wilfred Owen) (Z-Library).epub",
+          "taille": 65905
+        },
+        {
+          "fichier": "053. Socrates Defence (Penguin Little Blac... (Z-Library).epub",
+          "taille": 199290
+        },
+        {
+          "fichier": "055. Antigone (Greek Tragedy in New Translations) (Sophocles Reginald Gibbons (Translator) etc.) (Z-Library).pdf",
+          "taille": 7680025
+        },
+        {
+          "fichier": "056. The Life of a Stupid Man (Ryūnosuke Akutagawa) (Z-Library).epub",
+          "taille": 430087
+        },
+        {
+          "fichier": "057. How Much Land Does a Man Need And Other Stories (Penguin Classics) (Leo Tolstoy  A. N. Wilson) (Z-Library).epub",
+          "taille": 59964
+        },
+        {
+          "fichier": "059. Lord Arthur Saviles Crime (Penguin Li... (Z-Library).epub",
+          "taille": 241363
+        },
+        {
+          "fichier": "062. Lips Too Chilled (Matsuo Basho) (Z-Library).epub",
+          "taille": 371503
+        },
+        {
+          "fichier": "063. The Night is Darkening Round Me (Brontë Emily) (Z-Library).epub",
+          "taille": 401941
+        },
+        {
+          "fichier": "064. To-morrow (Joseph Conrad) (Z-Library).epub",
+          "taille": 91008
+        },
+        {
+          "fichier": "066. A Pair of Silk Stockings (Kate Chopin) (Z-Library).epub",
+          "taille": 439504
+        },
+        {
+          "fichier": "069. I Hate and I Love (Catullus Whigham Peter (translator)) (Z-Library).epub",
+          "taille": 302704
+        },
+        {
+          "fichier": "073. The fall of Icarus (Ovid, 43 B.C.-17 A.D. or 18 A.D., author) (Z-Library).pdf",
+          "taille": 2442816
+        },
+        {
+          "fichier": "074. Come Close (Sappho Poochigian Aaron (translator)) (Z-Library).epub",
+          "taille": 265492
+        },
+        {
+          "fichier": "079. Speaking of Śiva (Ramanujan, A. K) (Z-Library).epub",
+          "taille": 2226155
+        },
+        {
+          "fichier": "080. The Dhammapada (Anonymous) (Z-Library).epub",
+          "taille": 80995
+        },
+        {
+          "fichier": "081. Lady Susan (Jane Austen) (Z-Library).epub",
+          "taille": 683892
+        },
+        {
+          "fichier": "084. The Sea-Raiders (H.G. Wells) (Z-Library).epub",
+          "taille": 34393
+        },
+        {
+          "fichier": "086. To Be Read at Dusk (Charles Dickens [Dickens, Charles]) (Z-Library).epub",
+          "taille": 44358
+        },
+        {
+          "fichier": "088. Twain, Mark - The Stolen White Elephant (Twain, Mark [Twain, Mark]) (Z-Library).epub",
+          "taille": 79248
+        },
+        {
+          "fichier": "089. Tyger, Tyger (William Blake [Blake, William]) (Z-Library).epub",
+          "taille": 523997
+        },
+        {
+          "fichier": "090. Green Tea and Other Weird Stories (Oxford Worlds Classics) (J. Sheridan Le Fanu, Aaron Worth) (Z-Library).epub",
+          "taille": 1218565
+        },
+        {
+          "fichier": "092. Kidnapped (Equiano Olaudah) (Z-Library).epub",
+          "taille": 639511
+        },
+        {
+          "fichier": "093. A Modern Detective (Edgar Allan Poe) (Z-Library).epub",
+          "taille": 741912
+        },
+        {
+          "fichier": "094. The Suffragettes (Unknown) (Z-Library).epub",
+          "taille": 13580982
+        },
+        {
+          "fichier": "095. How To Be a Medieval Woman (Margery Kempe) (Z-Library).epub",
+          "taille": 716657
+        },
+        {
+          "fichier": "096. Typhoon and Other Stories (Joseph Conrad) (Z-Library).epub",
+          "taille": 1865889
+        },
+        {
+          "fichier": "099. The Withered Arm and Other Stories 1874-1888 (Thomas Hardy) (Z-Library).epub",
+          "taille": 5184740
+        },
+        {
+          "fichier": "100. Nonsense (Edward Lear) (Z-Library).epub",
+          "taille": 1330148
+        },
+        {
+          "fichier": "101. The Frogs (Penguin Little Black Class... (Z-Library).epub",
+          "taille": 452263
+        },
+        {
+          "fichier": "102. Why I Am so Clever (Friedrich Nietzsche) (Z-Library).epub",
+          "taille": 574422
+        },
+        {
+          "fichier": "103. Letters to a Young Poet (Rainer Maria Rilke) (Z-Library).epub",
+          "taille": 689264
+        },
+        {
+          "fichier": "104. Seven Hanged (Leonid Andreyev) (Z-Library).epub",
+          "taille": 839746
+        },
+        {
+          "fichier": "105. Oroonoko The Royal Slave - a True History (Aphra Behn) (Z-Library).epub",
+          "taille": 543171
+        },
+        {
+          "fichier": "106. O Frabjous Day (Lewis Carroll) (Z-Library).epub",
+          "taille": 1068167
+        },
+        {
+          "fichier": "107. The Sandman (E.T.A. Hoffmann [Hoffmann, E. T. A.]) (Z-Library).epub",
+          "taille": 546410
+        },
+        {
+          "fichier": "108. Trivia or the Art of Walking the Streets of London (Gay John) (Z-Library).epub",
+          "taille": 648555
+        },
+        {
+          "fichier": "109. Love That Moves the Sun and Other Stars (Dante Alighieri) (Z-Library).epub",
+          "taille": 595557
+        },
+        {
+          "fichier": "110. The Queen of Spades (Alexander Pushkin) (Z-Library).epub",
+          "taille": 722170
+        },
+        {
+          "fichier": "111. A Nervous Breakdown (Chekhov, Anton Pavlovich) (Z-Library).epub",
+          "taille": 576729
+        },
+        {
+          "fichier": "112. The Book of Tea (Okakura Kakuzo) (Z-Library).epub",
+          "taille": 4174085
+        },
+        {
+          "fichier": "113. Is This a Dagger Which I See Before Me (Shakespeare William) (Z-Library).epub",
+          "taille": 538975
+        },
+        {
+          "fichier": "114. My Life Had Stood a Loaded Gun (Emily Dickinson [Dickinson, Emily]) (Z-Library).epub",
+          "taille": 529337
+        },
+        {
+          "fichier": "115. Daphnis and Chloe (Longus) (Z-Library).epub",
+          "taille": 535717
+        },
+        {
+          "fichier": "116. Matilda (Shelley, Mary W) (Z-Library).epub",
+          "taille": 694112
+        },
+        {
+          "fichier": "117. The Lifted Veil (Eliot George) (Z-Library).epub",
+          "taille": 741879
+        },
+        {
+          "fichier": "118. White Nights (Penguin Little Black Cl... (Z-Library).epub",
+          "taille": 277227
+        },
+        {
+          "fichier": "119. Only Dull People Are Brilliant at Breakfast (Oscar Wilde [Wilde, Oscar]) (Z-Library).epub",
+          "taille": 511449
+        },
+        {
+          "fichier": "120. Flush (Woolf Virginia) (Z-Library).epub",
+          "taille": 1829925
+        },
+        {
+          "fichier": "121. Lot No. 249 (Arthur Conan Doyle) (Z-Library).epub",
+          "taille": 267101
+        },
+        {
+          "fichier": "122. The Rule of Benedict ( etc.) (Z-Library).epub",
+          "taille": 730069
+        },
+        {
+          "fichier": "123. Rip Van Winkle (Irving Washington) (Z-Library).epub",
+          "taille": 719487
+        },
+        {
+          "fichier": "124. Anecdotes of the Cynics (Dobbin, Robert (editor)) (Z-Library).epub",
+          "taille": 607583
+        },
+        {
+          "fichier": "125. Waterloo (Hugo Victor) (Z-Library).epub",
+          "taille": 502133
+        },
+        {
+          "fichier": "126. Stancliffes Hotel (Brontë Charlotte) (Z-Library).epub",
+          "taille": 636353
+        }
+      ]
+    },
+    {
+      "id": "Women in translation",
+      "titre": "Women In Translation",
+      "description": "",
+      "type": "dossier",
+      "source": "packs/Women in translation/",
+      "livres": [
+        {
+          "fichier": "Agua Viva - Clarice Lispector.epub",
+          "taille": 2351261
+        },
+        {
+          "fichier": "An Apprenticeship or the Book of Pleasures - Clarice Lispector.epub",
+          "taille": 1638011
+        },
+        {
+          "fichier": "Apartment Women (Ne iusui siktak) (Gu Byeong-mo, Chi-young Kim (translation)) (Z-Library).epub",
+          "taille": 1365358
+        },
+        {
+          "fichier": "Black Eggs (Kurihara Sadako etc.) (Z-Library).epub",
+          "taille": 932834
+        },
+        {
+          "fichier": "Blue Lorries - Radwa Ashour.epub",
+          "taille": 339612
+        },
+        {
+          "fichier": "Bonjour Tristesse and a Certain Smile (Francoise Sagan) (Z-Library).epub",
+          "taille": 556326
+        },
+        {
+          "fichier": "Celestial Bodies (Jokha Alharthi, Marilyn Booth) (Z-Library).epub",
+          "taille": 1482873
+        },
+        {
+          "fichier": "Death in Spring - Merce Rodoreda.epub",
+          "taille": 224727
+        },
+        {
+          "fichier": "Drive Your Plow Over the Bones of the Dead - Olga Tokarczuk.epub",
+          "taille": 1777717
+        },
+        {
+          "fichier": "Fair Play (Jansson Tove, Ali Smith (introduction)) (Z-Library).epub",
+          "taille": 272787
+        },
+        {
+          "fichier": "Five Spice Street (The Margellos World Republic of Letters) (Can Xue, Karen Gernant (translation) etc.) (Z-Library).pdf",
+          "taille": 812436
+        },
+        {
+          "fichier": "Flights (Bieguni) (Olga Tokarczuk, Jennifer Croft (translation)) (Z-Library).epub",
+          "taille": 2715343
+        },
+        {
+          "fichier": "Greek Lessons_ A Novel - Han Kang.epub",
+          "taille": 5425684
+        },
+        {
+          "fichier": "Heart Lamp (Banu Mushtaq) (Z-Library).epub",
+          "taille": 1370253
+        },
+        {
+          "fichier": "Hunchback (Saou Ichikawa) (Z-Library).epub",
+          "taille": 5658830
+        },
+        {
+          "fichier": "If Not, Winter - Sappho.epub",
+          "taille": 8836957
+        },
+        {
+          "fichier": "In Memory of Memory (Maria Stepanova, Sasha Dugdale (translation)) (Z-Library).epub",
+          "taille": 636805
+        },
+        {
+          "fichier": "Katalin Street (Magda Szabo) (Z-Library).epub",
+          "taille": 1512745
+        },
+        {
+          "fichier": "Kim Jiyoung, Born 1982 A Novel (Cho Nam-Joo, Jamie Chang (translation)) (Z-Library).epub",
+          "taille": 1649422
+        },
+        {
+          "fichier": "Last Words from Montmartre (Qiu Miaojin, Larissa Heinrich (translation)) (Z-Library).epub",
+          "taille": 738451
+        },
+        {
+          "fichier": "Let Us Believe in the Beginning of the Cold Season (Forough Farrokhzad, Elizabeth T. Gray etc.) (Z-Library).epub",
+          "taille": 752817
+        },
+        {
+          "fichier": "Love (Kjærlighet) (Hanne Ørstavik) (Z-Library).epub",
+          "taille": 1488357
+        },
+        {
+          "fichier": "Minor Detail (Adania Shibli) (Z-Library).epub",
+          "taille": 537179
+        },
+        {
+          "fichier": "Miss Kim Knows and Other Stories (Cho Nam-Joo, Jamie Chang (translation)) (Z-Library).epub",
+          "taille": 8101083
+        },
+        {
+          "fichier": "My Brilliant Friend (Elena Ferrante) (Z-Library).epub",
+          "taille": 640662
+        },
+        {
+          "fichier": "Not a River (No es un río) (Selva Almada, Annie McDermott (translation)) (Z-Library).epub",
+          "taille": 681324
+        },
+        {
+          "fichier": "Notes of a Crocodile (Qiu Miaojin, Bonnie Huie (translation)) (Z-Library).epub",
+          "taille": 1774698
+        },
+        {
+          "fichier": "Nowhere to Be Found (Bae Suah, Sora Kim-Russell (translation)) (Z-Library).epub",
+          "taille": 326750
+        },
+        {
+          "fichier": "Other Worlds Peasants, Pilgrims, Spirits, Saints (NYRB, 2021) (Nadezhda Teffi, Robert Chandler etc.) (Z-Library).epub",
+          "taille": 1339920
+        },
+        {
+          "fichier": "Paradais (Fernanda Melchor, Sophie Hughes (translation)) (Z-Library).epub",
+          "taille": 2399752
+        },
+        {
+          "fichier": "Record of a Night too Brief (Hebi wo fumu) (Hiromi Kawakami, Lucy North (translation)) (Z-Library).epub",
+          "taille": 2140060
+        },
+        {
+          "fichier": "Reservoir Bitches (Perras de reserva) (Dahlia de la Cerda etc.) (Z-Library).epub",
+          "taille": 2056243
+        },
+        {
+          "fichier": "Shame - Annie Ernaux.epub",
+          "taille": 2949968
+        },
+        {
+          "fichier": "Simple Passion (Annie Ernaux, Tanya Leslie (translation)) (Z-Library).epub",
+          "taille": 154646
+        },
+        {
+          "fichier": "Solenoid (Mircea Cărtărescu, Sean Cotter (translation)) (Z-Library).epub",
+          "taille": 4570185
+        },
+        {
+          "fichier": "Space Invaders (Nona Fernández, Natasha Wimmer (translation)) (Z-Library).epub",
+          "taille": 2048570
+        },
+        {
+          "fichier": "Spring Garden (Haru No Niwa) (Tomoka Shibasaki, Polly Barton (translation)) (Z-Library).epub",
+          "taille": 253841
+        },
+        {
+          "fichier": "Swallowing Mercury (Wioletta Greg, Eliza Marciniak (translation)) (Z-Library).epub",
+          "taille": 893076
+        },
+        {
+          "fichier": "Tentacle (Rita Indiana, Achy Obejas (translation)) (Z-Library).epub",
+          "taille": 1751442
+        },
+        {
+          "fichier": "The Bridegroom Was a Dog (Inu muko iri) (Yoko Tawada, Margaret Mitsutani (translation)) (Z-Library).epub",
+          "taille": 124923
+        },
+        {
+          "fichier": "The Days of Abandonment - Elena Ferrante.epub",
+          "taille": 432574
+        },
+        {
+          "fichier": "The Employees A Workplace Novel of the 22nd Century (Olga Ravn, Martin Aitken (translation)) (Z-Library).epub",
+          "taille": 1146512
+        },
+        {
+          "fichier": "The Empusium A Health Resort Horror Story (Olga Tokarczuk etc.) (Z-Library).epub",
+          "taille": 3599114
+        },
+        {
+          "fichier": "The Hunger Angel A Novel (Müller Herta) (Z-Library).epub",
+          "taille": 271705
+        },
+        {
+          "fichier": "The Iliac Crest (La Cresta de Ilión) (Cristina Rivera Garza etc.) (Z-Library).epub",
+          "taille": 906043
+        },
+        {
+          "fichier": "The Lover - Marguerite Duras.epub",
+          "taille": 2261698
+        },
+        {
+          "fichier": "The Magical Language of Others A Memoir (E. J. Koh, Eun Ji Koh) (Z-Library).epub",
+          "taille": 20110269
+        },
+        {
+          "fichier": "The Pear Field (Nana Ekvtimishvili, Elizabeth Heighway) (Z-Library).epub",
+          "taille": 440628
+        },
+        {
+          "fichier": "The Premonition (Kanashii yokan) (Banana Yoshimoto, Asa Yoneda (translation)) (Z-Library).epub",
+          "taille": 300546
+        },
+        {
+          "fichier": "The Story Of My Teeth (Valeria Luiselli etc.) (Z-Library).epub",
+          "taille": 2135869
+        },
+        {
+          "fichier": "The Story of a New Name (Neopolitan Novel 2) (Elena Ferrante, Ann Goldstein (translation)) (Z-Library).epub",
+          "taille": 1481814
+        },
+        {
+          "fichier": "The Story of the Lost Child (Elena Ferrante) (Z-Library).epub",
+          "taille": 1534674
+        },
+        {
+          "fichier": "The Summer Book (Sommarboken) (Tove Jansson, Thomas Teal (translation) etc.) (Z-Library).epub",
+          "taille": 1931392
+        },
+        {
+          "fichier": "The Wall (Marlen Haushofer) (Z-Library).epub",
+          "taille": 1741495
+        },
+        {
+          "fichier": "The White Book - Han Kang.epub",
+          "taille": 1158280
+        },
+        {
+          "fichier": "The Woman Destroyed - Simone De Beauvoir.epub",
+          "taille": 1954964
+        },
+        {
+          "fichier": "The Woman from Tantoura_ A Palestinian Nov - Radwa Ashour.epub",
+          "taille": 468992
+        },
+        {
+          "fichier": "Things Seen (Annie Ernaux, Brian Evenson (translation) etc.) (Z-Library).epub",
+          "taille": 228712
+        },
+        {
+          "fichier": "Thirst (Marina Yuszczuk, Heather Cleary (translation)) (Z-Library).epub",
+          "taille": 966777
+        },
+        {
+          "fichier": "Those Who Leave and Those Who Stay (Elena Ferrante) (Z-Library).epub",
+          "taille": 1414404
+        },
+        {
+          "fichier": "War, So Much War (Rodoreda Mercè) (Z-Library).epub",
+          "taille": 742352
+        },
+        {
+          "fichier": "We Do Not Part - Han Kang.epub",
+          "taille": 6146641
+        },
+        {
+          "fichier": "When Women Kill (Las homicidas) Four Crimes Retold (Alia Trabucco Zerán etc.) (Z-Library).epub",
+          "taille": 7443652
+        },
+        {
+          "fichier": "Why I Killed My Best Friend (Michalopoulou Amanda) (Z-Library).epub",
+          "taille": 438766
         }
       ]
     }
